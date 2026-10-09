@@ -144,3 +144,6 @@ if (!$lazy) {
         file_put_contents($manifestFile, '<?php return ' . var_export($registry->buildManifest(__DIR__), true) . ';');
     }
 }
+
+// Estado de los trabajos asíncronos (->asyncable()/->async()); fuera del manifiesto de rutas
+Core\Endpoint::registerJobsRoute();

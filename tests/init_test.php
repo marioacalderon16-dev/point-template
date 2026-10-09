@@ -99,3 +99,14 @@ test('parche 25: init copia Rules.php y la config de middleware con public, auth
         }
     });
 });
+
+test('init copia todos los archivos de core/ (un archivo nuevo del core no puede quedarse fuera)', function () {
+    withInitProject(function (string $app, string $out, string $root) {
+        $files = fn (string $base) => array_map(
+            fn ($f) => substr($f, strlen($base) + 1),
+            array_filter(iterator_to_array(new RecursiveIteratorIterator(new RecursiveDirectoryIterator("$base/core", FilesystemIterator::SKIP_DOTS))), fn ($f) => str_ends_with((string) $f, '.php'))
+        );
+        $missing = array_diff(array_map('strval', $files($root)), array_map('strval', $files($app)));
+        expect(array_values($missing))->toBe([]);
+    });
+});

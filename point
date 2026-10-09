@@ -122,6 +122,8 @@ function init(?string $name): void
         'core/helpers.php',
         'core/Testing.php',
         'core/Queue.php',
+        'core/Job.php',
+        'core/AsyncEndpointJob.php',
         'core/Middleware/MiddlewareManager.php',
         'core/Middleware/AuthMiddleware.php',
         'core/Middleware/CorsMiddleware.php',

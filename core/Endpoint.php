@@ -23,6 +23,11 @@ class Endpoint
     private array $uses = [];
     private ?int $cache = null;
     private ?string $mcp = null;
+    private ?int $idempotent = null;
+    private ?array $async = null;
+
+    /** Bloqueos de idempotencia de esta petición: flock se libera solo al terminar el proceso. */
+    private static array $locks = [];
 
     private function __construct() {}
 
@@ -80,6 +85,37 @@ class Endpoint
             throw new \InvalidArgumentException('Endpoint::cache(): los segundos deben ser 1 o más.');
         }
         $this->cache = $seconds;
+        return $this;
+    }
+
+    /**
+     * Con la cabecera Idempotency-Key, una petición repetida (reintento, doble clic) no se vuelve a
+     * ejecutar: recibe la misma respuesta (Idempotent-Replayed: true). La clave se guarda por ruta y
+     * usuario durante $seconds. Misma clave con otros datos → 422; misma clave en curso → 409.
+     */
+    public function idempotent(int $seconds = 86400): self
+    {
+        if ($seconds < 1) {
+            throw new \InvalidArgumentException('Endpoint::idempotent(): los segundos deben ser 1 o más.');
+        }
+        $this->idempotent = $seconds;
+        return $this;
+    }
+
+    /**
+     * Con la cabecera `Prefer: respond-async` la ruta responde 202 con un ticket y se ejecuta en la
+     * cola; el resultado se consulta en GET /jobs/{id} durante $keep segundos. Sin la cabecera, igual que siempre.
+     */
+    public function asyncable(int $keep = 86400): self
+    {
+        $this->async = ['keep' => max(60, $keep), 'forced' => false];
+        return $this;
+    }
+
+    /** Como asyncable(), pero siempre en la cola (procesos que nunca conviene esperar). */
+    public function async(int $keep = 86400): self
+    {
+        $this->async = ['keep' => max(60, $keep), 'forced' => true];
         return $this;
     }
 
@@ -166,6 +202,8 @@ class Endpoint
             'uses' => $this->uses,
             'cache' => $this->cache,
             'mcp' => $this->mcp,
+            'idempotent' => $this->idempotent,
+            'async' => $this->async,
         ]);
         return $this;
     }
@@ -274,11 +312,19 @@ class Endpoint
         }
 
         try {
-            $handler = self::resolveHandler($route['callback']);
+            // Idempotencia: una repetición con la misma clave recibe la respuesta guardada
+            $idem = self::idempotencyBegin($route, $validatedData);
+            if ($idem !== null && isset($idem['replay'])) {
+                header('Idempotent-Replayed: true');
+                self::sendResponse($idem['replay']);
+                return;
+            }
 
-            if (!is_callable($handler)) {
-                $desc = $route['callback'] instanceof \Closure ? 'Closure' : json_encode($route['callback']);
-                throw new \RuntimeException("Handler no es invocable: {$desc} (" . ($route['file'] ?? '?') . ')');
+            if (self::wantsAsync($route)) {
+                $response = self::enqueueAsync($route, $requestMethod, $validatedData);
+                self::idempotencyEnd($idem, $response);
+                self::sendResponse($response);
+                return;
             }
 
             $cacheKey = self::cacheKey($route, $requestMethod, $requestUri, $validatedData);
@@ -291,20 +337,7 @@ class Endpoint
                 }
             }
 
-            $args = [$validatedData];
-            foreach ($route['uses'] ?? [] as $serviceClass) {
-                $args[] = Container::resolve($serviceClass);
-            }
-            $response = call_user_func_array($handler, $args);
-
-            if (!empty($route['connectsTo'])) {
-                $connector = new Connector();
-                $response = $connector->executeChain($route['connectsTo'], $response, $context);
-            }
-
-            if (!empty($route['transform'])) {
-                $response = call_user_func($route['transform'], $response);
-            }
+            $response = self::execute($route, $validatedData, $context);
 
             if ($cacheKey !== null && self::isSuccessful($response)) {
                 // Ida y vuelta por JSON: la caché no guarda objetos y la respuesta sale igual
@@ -313,6 +346,7 @@ class Endpoint
                 header('X-Cache: MISS');
             }
 
+            self::idempotencyEnd($idem, $response);
             self::sendResponse($response);
         } catch (\Throwable $e) {
             if (!empty($route['onError'])) {
@@ -351,6 +385,146 @@ class Endpoint
     public static function addGlobalMiddleware(string $name): void
     {
         MiddlewareManager::global($name);
+    }
+
+    /**
+     * Ejecuta el handler con datos ya validados (más uses, connectTo y transform). Lo usan run() y
+     * el job asíncrono (AsyncEndpointJob), que no tiene petición HTTP.
+     */
+    public static function execute(array $route, array $data, array &$context): mixed
+    {
+        $handler = self::resolveHandler($route['callback']);
+        if (!is_callable($handler)) {
+            $desc = $route['callback'] instanceof \Closure ? 'Closure' : json_encode($route['callback']);
+            throw new \RuntimeException("Handler no es invocable: {$desc} (" . ($route['file'] ?? '?') . ')');
+        }
+
+        $args = [$data];
+        foreach ($route['uses'] ?? [] as $serviceClass) {
+            $args[] = Container::resolve($serviceClass);
+        }
+        $response = call_user_func_array($handler, $args);
+
+        if (!empty($route['connectsTo'])) {
+            $response = (new Connector())->executeChain($route['connectsTo'], $response, $context);
+        }
+        if (!empty($route['transform'])) {
+            $response = call_user_func($route['transform'], $response);
+        }
+        return $response;
+    }
+
+    private static function wantsAsync(array $route): bool
+    {
+        if (empty($route['async'])) {
+            return false;
+        }
+        return $route['async']['forced']
+            || stripos((string) InputExtractor::header('prefer', ''), 'respond-async') !== false;
+    }
+
+    /** Encola la ejecución y responde 202 con el ticket (con QUEUE_SYNC=true se ejecuta al momento). */
+    private static function enqueueAsync(array $route, string $method, array $data): array
+    {
+        $id = bin2hex(random_bytes(16));
+        $owner = $data['_user_id'] ?? null;
+        $keep = $route['async']['keep'];
+        Cache::set("job:$id", ['state' => 'queued', 'owner' => $owner, 'created_at' => date('c')], $keep);
+
+        $payload = [
+            'job_id' => $id,
+            'file' => $route['file'],
+            'method' => $method,
+            'path' => $route['path'],
+            'data' => $data,
+            'keep' => $keep,
+        ];
+        if (filter_var($_ENV['QUEUE_SYNC'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+            (new AsyncEndpointJob())->handle($payload);
+        } else {
+            Queue::dispatch(AsyncEndpointJob::class, $payload, 0, 1); // un solo intento: no repetir escrituras
+        }
+
+        header("Location: /jobs/$id");
+        header('Preference-Applied: respond-async');
+        $entry = Cache::get("job:$id") ?? [];
+        return ['status' => 202, 'job' => $id, 'state' => $entry['state'] ?? 'queued', 'status_url' => "/jobs/$id"];
+    }
+
+    /**
+     * @return array{replay: mixed}|array{key: string, hash: string, ttl: int}|null
+     */
+    private static function idempotencyBegin(array $route, array $data): ?array
+    {
+        $header = InputExtractor::header('idempotency-key');
+        if (empty($route['idempotent']) || !is_string($header) || $header === '') {
+            return null;
+        }
+        if (strlen($header) > 255) {
+            self::sendJson(['status' => 400, 'message' => 'Idempotency-Key demasiado larga (máximo 255).'], 400);
+        }
+
+        $scope = implode('|', $route['methods']) . ' ' . $route['path'] . ' ' . json_encode($data['_user_id'] ?? null);
+        $key = 'idem:' . sha1($scope . ' ' . $header);
+        unset($data['_user']);
+        ksort($data);
+        $hash = sha1((string) json_encode($data));
+
+        // Un proceso a la vez por clave; el bloqueo se libera solo al terminar (también con exit)
+        $dir = (defined('BASE_PATH') ? BASE_PATH : getcwd()) . '/storage/locks';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        $lock = fopen("$dir/" . sha1($key) . '.lock', 'c');
+        if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
+            self::sendJson(['status' => 409, 'message' => 'Ya hay una petición en curso con esta Idempotency-Key.'], 409);
+        }
+        self::$locks[] = $lock;
+
+        $stored = Cache::get($key);
+        if (is_array($stored)) {
+            if ($stored['hash'] !== $hash) {
+                self::sendJson(['status' => 422, 'message' => 'Esta Idempotency-Key ya se usó con otros datos.'], 422);
+            }
+            return ['replay' => $stored['response']];
+        }
+        return ['key' => $key, 'hash' => $hash, 'ttl' => $route['idempotent']];
+    }
+
+    /** Guarda la respuesta para las repeticiones (no las 5xx: un error del servidor se puede reintentar). */
+    private static function idempotencyEnd(?array $idem, mixed $response): void
+    {
+        if ($idem === null || !isset($idem['key'])) {
+            return;
+        }
+        $status = is_array($response) ? ($response['status'] ?? 200) : 200;
+        if (is_int($status) && $status >= 500) {
+            return;
+        }
+        $response = is_string($response) ? $response : json_decode((string) json_encode($response), true);
+        Cache::set($idem['key'], ['hash' => $idem['hash'], 'response' => $response], $idem['ttl']);
+    }
+
+    /** GET /jobs/{id}: estado de un trabajo asíncrono; solo lo ve quien lo lanzó (si había usuario). */
+    public static function registerJobsRoute(): void
+    {
+        self::from('')->at('GET /jobs/{id}')->name('jobs.show')
+            ->expects(['id' => 'required|string|regex:/^[a-f0-9]{32}$/'])
+            ->handle(function (array $in) {
+                $entry = Cache::get('job:' . $in['id']);
+                if (!is_array($entry)) {
+                    return Response::notFound('Trabajo no encontrado');
+                }
+                if (($entry['owner'] ?? null) !== null) {
+                    $claims = preg_match('/^Bearer\s+(\S+)$/i', (string) InputExtractor::header('authorization', ''), $m)
+                        ? Auth::verify($m[1]) : null;
+                    if ((string) ($claims['sub'] ?? '') !== (string) $entry['owner']) {
+                        return Response::notFound('Trabajo no encontrado');
+                    }
+                }
+                unset($entry['owner']);
+                return ['status' => 200, 'job' => $in['id']] + $entry;
+            });
     }
 
     private static function cacheKey(array $route, string $method, string $uri, array $data): ?string
