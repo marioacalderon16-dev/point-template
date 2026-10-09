@@ -8,6 +8,8 @@ match ($command) {
     'init' => init($argv[2] ?? null),
     'serve' => serve($argv[2] ?? '8080'),
     'routes' => listRoutes(),
+    'call' => callEndpoint(array_slice($argv, 2)),
+    'mcp' => mcpServer(array_slice($argv, 2)),
     'cache' => cacheRoutes(),
     'cache:clear' => clearRouteCache(),
     'openapi' => generateOpenApi(array_slice($argv, 2)),
@@ -1022,6 +1024,271 @@ PHP;
 // TEST
 // ────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────
+// CALL y MCP: ejecutar endpoints desde la terminal o desde un asistente de IA
+// ────────────────────────────────────────────────
+
+/**
+ * Busca la ruta por nombre (posts.create) o por 'MÉTODO /ruta' y sustituye los {parámetros}
+ * con los campos indicados (que dejan de enviarse como cuerpo o query).
+ * @return array{method: string, path: string, fields: array}|string mensaje de error
+ */
+function resolveCallTarget(string $target, ?string $method, array $fields): array|string
+{
+    $registry = \Core\RouteRegistry::getInstance();
+    if (preg_match('#^([A-Za-z|]+)\s+(/\S*)$#', trim($target), $m)) {
+        $method = strtoupper($method ?? explode('|', $m[1])[0]);
+        $path = $m[2];
+    } else {
+        $route = $registry->findByName($target);
+        if ($route === null) {
+            return "No existe ninguna ruta con nombre '$target' (php point routes las lista).";
+        }
+        $method = strtoupper($method ?? $route['methods'][0]);
+        if (!in_array($method, $route['methods'], true)) {
+            return "La ruta '$target' no admite $method (admite " . implode(', ', $route['methods']) . ').';
+        }
+        $path = $route['path'];
+    }
+
+    $missing = [];
+    $path = (string) preg_replace_callback('/\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}/', function ($p) use (&$fields, &$missing) {
+        if (!array_key_exists($p[1], $fields)) {
+            $missing[] = $p[1];
+            return $p[0];
+        }
+        $value = rawurlencode((string) $fields[$p[1]]);
+        unset($fields[$p[1]]);
+        return $value;
+    }, $path);
+    if ($missing) {
+        return 'Faltan parámetros de ruta: ' . implode(', ', $missing) . ' (p. ej. ' . $missing[0] . '=1).';
+    }
+    return ['method' => $method, 'path' => $path, 'fields' => $fields];
+}
+
+/**
+ * php point call <nombre|"MÉTODO /ruta"> [campo=valor ...] [--as=ID] [--role=rol] [--method=M] [--data]
+ * Ejecuta el endpoint con el pipeline real (grupos, guard, expects, cache). El cuerpo puede llegar
+ * en JSON por stdin. Salida: el JSON de la respuesta. Código: 0 (2xx/3xx), 1 (4xx), 2 (5xx).
+ */
+function callEndpoint(array $args): never
+{
+    $target = null;
+    $fields = [];
+    $opts = ['as' => null, 'role' => null, 'method' => null, 'data' => false, 'stdin' => false];
+    foreach ($args as $arg) {
+        if ($arg === '-') {
+            $opts['stdin'] = true;
+        } elseif ($arg === '--data') {
+            $opts['data'] = true;
+        } elseif (preg_match('/^--(as|role|method)=(.*)$/', $arg, $m)) {
+            $opts[$m[1]] = $m[2];
+        } elseif ($target === null && !str_starts_with($arg, '--')) {
+            $target = $arg;
+        } elseif (preg_match('/^([A-Za-z0-9_]+)=(.*)$/s', $arg, $m)) {
+            // Un valor JSON válido (números, true, [1,2], {"a":1}) se envía con su tipo; el resto, como texto
+            $decoded = json_decode($m[2], true);
+            $fields[$m[1]] = json_last_error() === JSON_ERROR_NONE && !is_string($decoded) ? $decoded : $m[2];
+        } else {
+            fwrite(STDERR, "Argumento no reconocido: $arg\n");
+            exit(1);
+        }
+    }
+    if ($target === null) {
+        fwrite(STDERR, "Uso: php point call <nombre|\"MÉTODO /ruta\"> [campo=valor ...] [-] [--as=ID] [--role=rol] [--method=M] [--data]\n");
+        exit(1);
+    }
+
+    // Cuerpo JSON por stdin (tuberías); los campo=valor de la línea de comandos tienen prioridad.
+    // Con '-' se espera siempre a stdin; sin él, solo si hay datos (o EOF) en 200 ms, para no
+    // quedarse esperando cuando stdin es una tubería abierta sin datos (cron, IDE, agentes)
+    $read = [STDIN];
+    $none = [];
+    if ($opts['stdin'] || (!stream_isatty(STDIN) && @stream_select($read, $none, $none, 0, 200000) > 0)) {
+        $stdin = trim((string) stream_get_contents(STDIN));
+        if ($stdin !== '') {
+            $json = json_decode($stdin, true);
+            if (!is_array($json)) {
+                fwrite(STDERR, "stdin no es un objeto JSON válido.\n");
+                exit(1);
+            }
+            $fields = array_merge($json, $fields);
+        }
+    }
+
+    requireProject();
+
+    $resolved = resolveCallTarget($target, $opts['method'], $fields);
+    if (is_string($resolved)) {
+        fwrite(STDERR, "$resolved\n");
+        exit(1);
+    }
+    ['method' => $method, 'path' => $path, 'fields' => $fields] = $resolved;
+
+    $_SERVER['REQUEST_METHOD'] = $method;
+    if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+        \Core\InputExtractor::$bodyOverride = $fields;
+        $_GET = [];
+    } else {
+        $_GET = $fields;
+    }
+    $_SERVER['REQUEST_URI'] = $path . ($_GET ? '?' . http_build_query($_GET) : '');
+    $_SERVER['REMOTE_ADDR'] ??= '127.0.0.1';
+
+    // --as solo existe en la CLI: quien ejecuta point ya tiene acceso al servidor y a JWT_SECRET
+    if ($opts['as'] !== null) {
+        $sub = ctype_digit($opts['as']) ? (int) $opts['as'] : $opts['as'];
+        $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . \Core\Auth::issue(array_filter(['sub' => $sub, 'role' => $opts['role']], fn ($v) => $v !== null));
+    }
+
+    // Endpoint::run() termina con exit: la salida se recoge al cerrar el proceso
+    $onlyData = $opts['data'];
+    ob_start();
+    register_shutdown_function(function () use ($onlyData) {
+        $body = (string) ob_get_clean();
+        $code = (int) (http_response_code() ?: 200);
+        if ($onlyData) {
+            $decoded = json_decode($body, true);
+            $body = is_array($decoded) && array_key_exists('data', $decoded)
+                ? (string) json_encode($decoded['data'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                : $body;
+        }
+        echo rtrim($body), "\n";
+        exit($code >= 500 ? 2 : ($code >= 400 ? 1 : 0));
+    });
+    \Core\Endpoint::run();
+    exit(0);
+}
+
+/** Herramientas MCP: rutas marcadas con ->mcp('descripción'). */
+function mcpTools(): array
+{
+    $tools = [];
+    foreach (\Core\RouteRegistry::getInstance()->getRoutes() as $route) {
+        if (empty($route['mcp'])) {
+            continue;
+        }
+        preg_match_all('/\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}/', $route['path'], $m);
+        foreach ($route['methods'] as $method) {
+            $base = $route['name'] ?? strtolower($method) . '_' . trim((string) preg_replace('/[^a-zA-Z0-9]+/', '_', $route['path']), '_');
+            $name = (string) preg_replace('/[^a-zA-Z0-9_-]/', '_', $base) . (count($route['methods']) > 1 ? '_' . strtolower($method) : '');
+
+            $properties = [];
+            $required = [];
+            foreach ($m[1] as $param) {
+                $properties[$param] = ['type' => 'string', 'description' => 'Parámetro de ruta'];
+                $required[] = $param;
+            }
+            foreach ($route['expects'] ?? [] as $field => $ruleString) {
+                $rules = is_array($ruleString) ? array_values($ruleString) : explode('|', $ruleString);
+                if (in_array('file', $rules, true) || str_starts_with((string) $field, '_')) {
+                    continue;
+                }
+                $properties[$field] = rulesToSchema($rules);
+                if (in_array('required', $rules, true) && !in_array($field, $required, true)) {
+                    $required[] = $field;
+                }
+            }
+
+            $tools[$name] = [
+                'definition' => [
+                    'name' => $name,
+                    'description' => $route['mcp'] . " ($method {$route['path']})",
+                    'inputSchema' => ['type' => 'object', 'properties' => (object) $properties, 'required' => $required],
+                    'annotations' => [
+                        'readOnlyHint' => in_array($method, ['GET', 'HEAD'], true),
+                        'destructiveHint' => $method === 'DELETE',
+                    ],
+                ],
+                'target' => "$method {$route['path']}",
+            ];
+        }
+    }
+    return $tools;
+}
+
+/**
+ * php point mcp [--as=ID] [--role=rol]: servidor MCP por stdio (JSON-RPC 2.0, un mensaje por línea).
+ * Cada llamada se ejecuta con `point call` en un subproceso (Endpoint::run() termina con exit).
+ * stdout es solo del protocolo; los avisos van a stderr.
+ */
+function mcpServer(array $args): never
+{
+    $as = null;
+    $role = null;
+    foreach ($args as $arg) {
+        if (preg_match('/^--(as|role)=(.+)$/', $arg, $m)) {
+            ${$m[1]} = $m[2];
+        }
+    }
+
+    ob_start(); // nada del arranque puede ensuciar stdout
+    requireProject();
+    $tools = mcpTools();
+    ob_end_clean();
+
+    $send = function (array $message): void {
+        fwrite(STDOUT, json_encode($message, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n");
+        fflush(STDOUT);
+    };
+    fwrite(STDERR, sprintf("point mcp: %d herramientas%s\n", count($tools), $as !== null ? " (actuando como $as)" : ''));
+
+    while (($line = fgets(STDIN)) !== false) {
+        $msg = json_decode(trim($line), true);
+        if (!is_array($msg) || !isset($msg['method'])) {
+            continue;
+        }
+        $id = $msg['id'] ?? null;
+        $params = $msg['params'] ?? [];
+        if ($id === null) {
+            continue; // notificación (p. ej. notifications/initialized): no se responde
+        }
+
+        $result = null;
+        $error = null;
+        switch ($msg['method']) {
+            case 'initialize':
+                $result = [
+                    'protocolVersion' => $params['protocolVersion'] ?? '2025-06-18',
+                    'capabilities' => ['tools' => (object) []],
+                    'serverInfo' => ['name' => 'point', 'version' => '1.0.0'],
+                ];
+                break;
+            case 'ping':
+                $result = (object) [];
+                break;
+            case 'tools/list':
+                $result = ['tools' => array_values(array_map(fn ($t) => $t['definition'], $tools))];
+                break;
+            case 'tools/call':
+                $tool = $tools[$params['name'] ?? ''] ?? null;
+                if ($tool === null) {
+                    $error = ['code' => -32602, 'message' => 'Herramienta desconocida: ' . ($params['name'] ?? '')];
+                    break;
+                }
+                [$method, $path] = explode(' ', $tool['target'], 2);
+                $cmd = 'php ' . escapeshellarg(__FILE__) . ' call - ' . escapeshellarg("$method $path")
+                    . ($as !== null ? ' ' . escapeshellarg("--as=$as") : '')
+                    . ($role !== null ? ' ' . escapeshellarg("--role=$role") : '');
+                $proc = proc_open($cmd, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, getcwd());
+                fwrite($pipes[0], (string) json_encode((object) ($params['arguments'] ?? [])));
+                fclose($pipes[0]);
+                $out = trim((string) stream_get_contents($pipes[1]) . (string) stream_get_contents($pipes[2]));
+                fclose($pipes[1]);
+                fclose($pipes[2]);
+                $code = proc_close($proc);
+                \Core\Log::info('mcp.call', ['tool' => $params['name'], 'as' => $as, 'exit' => $code]);
+                $result = ['content' => [['type' => 'text', 'text' => $out]], 'isError' => $code !== 0];
+                break;
+            default:
+                $error = ['code' => -32601, 'message' => "Método no soportado: {$msg['method']}"];
+        }
+        $send(['jsonrpc' => '2.0', 'id' => $id] + ($error ? ['error' => $error] : ['result' => $result]));
+    }
+    exit(0);
+}
+
 /**
  * Prueba de humo: llama a todas las rutas con datos de ejemplo (sampleRequest) y falla si alguna
  * responde 5xx. Por defecto solo GET; --smoke=all incluye POST/PUT/PATCH/DELETE, que ESCRIBEN en
@@ -1896,6 +2163,8 @@ Point Framework CLI
 Comandos:
   init <nombre>                Crear un nuevo proyecto
   serve [puerto]               Iniciar servidor de desarrollo (default: 8080)
+  call <nombre|"MÉTODO /ruta"> [campo=valor] [--as=ID] [--role=r] [--data]  Ejecutar un endpoint desde la terminal (0 2xx, 1 4xx, 2 5xx)
+  mcp [--as=ID] [--role=r]     Servidor MCP: las rutas con ->mcp() como herramientas para asistentes de IA
   routes                       Listar rutas: método, grupo, acceso, campos y pipelines
   cache                        Generar manifiesto de rutas (carga lazy)
   cache:clear                  Eliminar manifiesto (volver a carga completa)

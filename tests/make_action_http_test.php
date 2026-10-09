@@ -47,8 +47,8 @@ test('make:http genera peticiones con token en rutas protegidas, cuerpo de ejemp
         // Cuerpo con valores de ejemplo según las reglas
         expect($http)->toContain('"email": "ana@example.com"');
         expect($http)->toContain('"status": "draft"');
-        // Ruta sin cuerpo con parámetro: {id} → 1
-        expect($http)->not()->toContain('{id}');
+        // Parámetro de ruta: {id} → 1 en la petición (el título conserva la ruta original)
+        expect($http)->toContain("### GET /_test/p31/items/{id} (p31.item · public)\nGET {{baseUrl}}/_test/p31/items/1");
 
         [, $exists] = pointIn(dirname(__DIR__), 'make:http --output=' . escapeshellarg($file), 'POINT_TESTING=1');
         expect($exists)->toBe(1);

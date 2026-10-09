@@ -22,6 +22,7 @@ class Endpoint
     private mixed $onError = null;
     private array $uses = [];
     private ?int $cache = null;
+    private ?string $mcp = null;
 
     private function __construct() {}
 
@@ -79,6 +80,16 @@ class Endpoint
             throw new \InvalidArgumentException('Endpoint::cache(): los segundos deben ser 1 o más.');
         }
         $this->cache = $seconds;
+        return $this;
+    }
+
+    /**
+     * Expone la ruta como herramienta para asistentes de IA (`php point mcp`). La descripción le
+     * explica a la IA cuándo usarla; los campos y sus reglas salen de expects().
+     */
+    public function mcp(string $description): self
+    {
+        $this->mcp = $description;
         return $this;
     }
 
@@ -154,6 +165,7 @@ class Endpoint
             'onError' => $this->onError,
             'uses' => $this->uses,
             'cache' => $this->cache,
+            'mcp' => $this->mcp,
         ]);
         return $this;
     }

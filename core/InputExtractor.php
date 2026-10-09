@@ -4,6 +4,9 @@ namespace Core;
 
 class InputExtractor
 {
+    /** Cuerpo inyectado por `php point call`: en CLI php://input siempre está vacío. */
+    public static ?array $bodyOverride = null;
+
     public static function extract(string $requestMethod, string $requestUri, string $routePath): array
     {
         $fromRoute = self::extractFromRoute($requestUri, $routePath);
@@ -111,6 +114,10 @@ class InputExtractor
         $allowedMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
         if (!in_array(strtoupper($requestMethod), $allowedMethods)) {
             return [];
+        }
+
+        if (self::$bodyOverride !== null) {
+            return self::$bodyOverride;
         }
 
         $maxBytes = 2 * 1024 * 1024;
