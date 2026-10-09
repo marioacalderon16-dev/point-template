@@ -7,8 +7,8 @@ class InputExtractor
     public static function extract(string $requestMethod, string $requestUri, string $routePath): array
     {
         $fromRoute = self::extractFromRoute($requestUri, $routePath);
-        $fromQuery = self::extractFromQuery();
-        $fromBody  = self::extractFromBody($requestMethod);
+        $fromQuery = self::withoutReserved(self::extractFromQuery());
+        $fromBody  = self::withoutReserved(self::extractFromBody($requestMethod));
 
         return array_merge($fromBody, $fromQuery, $fromRoute);
     }
@@ -16,8 +16,8 @@ class InputExtractor
     public static function extractWithSources(string $requestMethod, string $requestUri, string $routePath): array
     {
         $fromRoute = self::extractFromRoute($requestUri, $routePath);
-        $fromQuery = self::extractFromQuery();
-        $fromBody  = self::extractFromBody($requestMethod);
+        $fromQuery = self::withoutReserved(self::extractFromQuery());
+        $fromBody  = self::withoutReserved(self::extractFromBody($requestMethod));
 
         $values = array_merge($fromBody, $fromQuery, $fromRoute);
         $sources = [];
@@ -92,6 +92,15 @@ class InputExtractor
         return $params;
     }
 
+    /**
+     * Las claves que empiezan por '_' (_user_id, _user...) las reservan los middlewares: si las
+     * aceptáramos del cliente, podría suplantar al usuario autenticado o saltarse el rate limit.
+     */
+    private static function withoutReserved(array $data): array
+    {
+        return array_filter($data, fn ($key) => !is_string($key) || !str_starts_with($key, '_'), ARRAY_FILTER_USE_KEY);
+    }
+
     private static function extractFromQuery(): array
     {
         return $_GET;
@@ -104,12 +113,16 @@ class InputExtractor
             return [];
         }
 
-        $contentLength = $_SERVER['CONTENT_LENGTH'] ?? 0;
-        if ($contentLength > 2 * 1024 * 1024) {
+        $maxBytes = 2 * 1024 * 1024;
+        if ((int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > $maxBytes) {
             throw new \RuntimeException('Payload too large', 413);
         }
 
-        $input = file_get_contents('php://input');
+        // Lee como máximo un byte más del límite: con Transfer-Encoding chunked no hay Content-Length
+        $input = file_get_contents('php://input', false, null, 0, $maxBytes + 1);
+        if (is_string($input) && strlen($input) > $maxBytes) {
+            throw new \RuntimeException('Payload too large', 413);
+        }
 
         $json = json_decode($input, true);
         if (json_last_error() === JSON_ERROR_NONE) {

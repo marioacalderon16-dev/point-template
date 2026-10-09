@@ -8,7 +8,7 @@ class CorsMiddleware
     {
         // Sin CORS_ORIGINS explicito: '*' solo en development. Fuera de ahi, ningun origen
         // por defecto (nada de Access-Control-Allow-Origin) hasta que se configure a proposito.
-        $isDev = ($_ENV['APP_ENV'] ?? 'development') === 'development';
+        $isDev = \Core\ErrorHandler::isDevelopment();
         $configured = $params ?: ($_ENV['CORS_ORIGINS'] ?? ($isDev ? '*' : ''));
         $origins = array_map('trim', explode(',', $configured));
         $origin = $_SERVER['HTTP_ORIGIN'] ?? '';

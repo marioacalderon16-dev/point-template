@@ -12,6 +12,10 @@ class ErrorHandler
 
     public static function handleError(int $errno, string $errstr, string $errfile, int $errline): bool
     {
+        // Avisos silenciados con @ o excluidos de error_reporting: no deben tumbar la petición
+        if (!(error_reporting() & $errno)) {
+            return false;
+        }
         $error = self::buildErrorStructure('PHP Error', $errstr, $errfile, $errline, [], $errno);
         self::sendJsonError($error, 500);
         return true;
@@ -65,6 +69,8 @@ class ErrorHandler
 
     public static function isDevelopment(): bool
     {
-        return ($_ENV['APP_ENV'] ?? 'development') === 'development';
+        // Sin APP_ENV se asume producción: los detalles de error y CORS abierto solo con
+        // APP_ENV=development explícito
+        return ($_ENV['APP_ENV'] ?? 'production') === 'development';
     }
 }

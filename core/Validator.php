@@ -14,6 +14,25 @@ class Validator
     /** @var array<string, array{0: callable, 1: string}> Reglas propias: nombre => [comprobación, mensaje] */
     private static array $custom = [];
 
+    /** Tipos MIME aceptados por extensión en la regla 'mime' (contenido detectado con fileinfo). */
+    private const MIME_BY_EXTENSION = [
+        'jpg'  => ['image/jpeg'],
+        'jpeg' => ['image/jpeg'],
+        'png'  => ['image/png'],
+        'gif'  => ['image/gif'],
+        'webp' => ['image/webp'],
+        'svg'  => ['image/svg+xml'],
+        'pdf'  => ['application/pdf'],
+        'txt'  => ['text/plain'],
+        'csv'  => ['text/csv', 'text/plain', 'application/csv'],
+        'json' => ['application/json', 'text/plain'],
+        'zip'  => ['application/zip'],
+        'docx' => ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'],
+        'xlsx' => ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip'],
+        'mp3'  => ['audio/mpeg'],
+        'mp4'  => ['video/mp4'],
+    ];
+
     private const BUILTIN = [
         'trim', 'lowercase', 'uppercase', 'strip_tags', 'required', 'optional', 'string', 'integer',
         'numeric', 'boolean', 'array', 'email', 'min', 'max', 'in', 'not_in', 'list_in', 'source',
@@ -169,7 +188,11 @@ class Validator
                 break;
             case 'string':
                 if ($value !== null && !is_string($value)) {
-                    $value = (string) $value;
+                    if (is_scalar($value)) {
+                        $value = (string) $value;
+                    } else {
+                        $this->addError($field, "El campo {$field} debe ser una cadena.");
+                    }
                 }
                 break;
             case 'integer':
@@ -294,6 +317,10 @@ class Validator
                 }
                 break;
             case 'unique':
+                if ($value !== null && !is_scalar($value)) {
+                    $this->addError($field, "El campo {$field} no es válido.");
+                    break;
+                }
                 if ($value !== null && $value !== '') {
                     if ($param === null) {
                         $this->addError($field, "Regla 'unique' requiere parámetro (ej: unique:usuarios,email).");
@@ -335,6 +362,10 @@ class Validator
                 }
                 break;
             case 'exists':
+                if ($value !== null && !is_scalar($value)) {
+                    $this->addError($field, "El campo {$field} no es válido.");
+                    break;
+                }
                 if ($value !== null && $value !== '') {
                     if ($param === null) {
                         $this->addError($field, "Regla 'exists' requiere parámetro (ej: exists:roles,id).");
@@ -448,7 +479,11 @@ class Validator
                 if ($param !== null && $value instanceof \Core\UploadedFile) {
                     $allowed = array_map('trim', explode(',', $param));
                     $ext = $value->extension();
-                    if (!in_array($ext, $allowed, true)) {
+                    // La extensión la elige el cliente: para los tipos conocidos se comprueba
+                    // también el contenido real del archivo (fileinfo)
+                    $expected = self::MIME_BY_EXTENSION[$ext] ?? null;
+                    if (!in_array($ext, $allowed, true)
+                        || ($expected !== null && !in_array($value->mimeType(), $expected, true))) {
                         $this->addError($field, "El archivo {$field} debe ser de tipo: " . implode(', ', $allowed) . ".");
                     }
                 }

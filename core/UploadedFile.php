@@ -34,6 +34,17 @@ final class UploadedFile
 
     public function store(string $directory, ?string $name = null): string
     {
+        // Nunca fuera de storage/uploads: sin '..' en el directorio y el nombre sin rutas
+        if (in_array('..', preg_split('#[/\\\\]#', $directory), true)) {
+            throw new \InvalidArgumentException("Directorio de subida no permitido: {$directory}");
+        }
+        if ($name !== null) {
+            $name = basename(str_replace('\\', '/', $name));
+            if ($name === '' || $name === '.' || $name === '..') {
+                throw new \InvalidArgumentException('Nombre de archivo no permitido.');
+            }
+        }
+
         $basePath = (defined('BASE_PATH') ? BASE_PATH : getcwd()) . '/storage/uploads';
         $dir = rtrim($basePath, '/') . '/' . trim($directory, '/');
 

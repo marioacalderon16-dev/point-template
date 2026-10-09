@@ -23,8 +23,9 @@ class RateLimitMiddleware
         $limit = (int) ($params ?: 60);
         $window = 60; // 1 minuto
 
-        // Cliente: usuario autenticado (public_id UUID, se usa como cadena) o IP
-        $userId = $input['_user_id'] ?? ($input['usuario']['id'] ?? null);
+        // Cliente: usuario autenticado (lo pone el middleware auth; InputExtractor descarta las
+        // claves '_' que envía el cliente) o IP. Se usa como cadena (admite UUID)
+        $userId = $input['_user_id'] ?? null;
         $who = ($userId !== null && $userId !== '')
             ? 'u:' . (string) $userId
             : 'ip:' . self::resolveClientIp();

@@ -72,7 +72,7 @@ test('parche 19: init copia el CI con Postgres desechable, migrate y tests', fun
         expect($ci)->toContain('DB_DSN: pgsql:host=127.0.0.1');
         expect($ci)->toContain('run: php point migrate');
         expect($ci)->toContain('run: php point test');
-        expect($ci)->toContain('actions/checkout@v5');
+        expect($ci)->toContain('actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0');
     });
 });
 

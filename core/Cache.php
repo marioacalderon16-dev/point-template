@@ -120,7 +120,8 @@ final class Cache
             return null;
         }
 
-        $entry = @unserialize($content);
+        // Sin objetos: un archivo de caché manipulado no puede instanciar clases (gadget chains)
+        $entry = @unserialize($content, ['allowed_classes' => false]);
         return is_array($entry) && isset($entry['value'], $entry['expires_at']) ? $entry : null;
     }
 }

@@ -65,6 +65,11 @@ Una excepción en los pasos 4 a 6 la recoge `onError()` si está definido; si no
 `expects()` solo llegan los campos declarados, ya convertidos (`integer` → int, `boolean` → bool,
 `trim`, `lowercase`…). En rutas con token añade también los datos del usuario, que se leen con `Auth`.
 
+Las claves que empiezan por `_` están reservadas para los middlewares: si el cliente las envía, se
+descartan. **Una ruta POST/PUT/PATCH sin `expects` recibe cualquier campo**, y
+`DB::table(...)->insert($input)` guardaría también lo que no esperas (`role`, `is_admin`…).
+`php point routes` marca esas rutas con `NO-EXPECTS`.
+
 ## Recursos CRUD en un archivo
 
 ```php
@@ -108,6 +113,9 @@ En una ruta sin token lanzan un error (500) en lugar de devolver `null`.
 | `Auth::hasRole($input, 'admin', 'editor')` | `true` si tiene al menos uno |
 | `Auth::issue(['sub' => 1, 'role' => 'editor'])` | Emite un token (login) |
 
+Los tokens llevan `iss` y `aud` (`JWT_ISSUER`/`JWT_AUDIENCE` en `.env`, por defecto `point`/`point-api`)
+y solo se aceptan los que coinciden: un JWT de otro sistema que comparta el secreto no vale.
+
 ## Validación
 
 Reglas nativas: `required`, `optional`, `default:x`, `string`, `integer`, `numeric`, `boolean`,
@@ -124,3 +132,6 @@ Atajos de `App\Services\Rules`: `id()`, `uuid()`, `status(Enum::class | [...])`,
 Las reglas propias se definen en `Rules::custom()`.
 
 Una regla que no existe (errata) responde 500 en lugar de dejar el campo sin validar.
+
+`mime:jpg,png` comprueba la extensión y, para los tipos conocidos, también el contenido real del
+archivo. `$file->store('avatars', $nombre)` guarda siempre dentro de `storage/uploads`.

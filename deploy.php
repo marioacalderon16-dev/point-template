@@ -3,8 +3,8 @@
 /**
  * Ejecuta migraciones y seeds desde el navegador (hosting sin consola).
  *
- * Uso:
- *   https://tu-dominio.com/deploy.php?key=TU_DEPLOY_KEY&action=migrate
+ * Uso (solo POST; la clave va en una cabecera para que no quede en los logs de acceso):
+ *   curl -X POST -H "X-Deploy-Key: TU_DEPLOY_KEY" "https://tu-dominio.com/deploy.php?action=migrate"
  *
  * Acciones:
  *   migrate   — ejecutar migraciones pendientes
@@ -13,8 +13,10 @@
  *   status    — ver migraciones aplicadas
  *
  * Seguridad:
- *   Requiere DEPLOY_KEY en .env. Sin clave configurada, el script no hace nada.
- *   Elimina este archivo del servidor cuando no lo necesites.
+ *   Requiere DEPLOY_KEY en .env (32 caracteres o más). Sin clave configurada, el script no hace nada.
+ *   Solo es accesible si la raíz web es la del proyecto; con la raíz en public/ (recomendado) no
+ *   se puede llamar. Nunca expongas la raíz del proyecto solo para usarlo: dejaría .env
+ *   descargable. Elimina este archivo del servidor cuando no lo necesites.
  */
 
 require __DIR__ . '/vendor/autoload.php';
@@ -26,12 +28,20 @@ header('Content-Type: text/plain; charset=utf-8');
 
 $deployKey = $_ENV['DEPLOY_KEY'] ?? '';
 
-if ($deployKey === '') {
+if (strlen($deployKey) < 32) {
     http_response_code(403);
-    die("DEPLOY_KEY no configurada en .env\n");
+    die("DEPLOY_KEY no configurada en .env (mínimo 32 caracteres)\n");
 }
 
-if (($_GET['key'] ?? '') !== $deployKey) {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+    http_response_code(405);
+    header('Allow: POST');
+    die("Solo POST.\n");
+}
+
+// Comparación en tiempo constante: no revela por tiempos cuántos caracteres coinciden
+if (!hash_equals($deployKey, (string) ($_SERVER['HTTP_X_DEPLOY_KEY'] ?? ''))) {
+    sleep(1); // frena la fuerza bruta (el script no tiene rate limit)
     http_response_code(403);
     die("Clave invalida.\n");
 }

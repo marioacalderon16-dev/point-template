@@ -324,6 +324,7 @@ function listRoutes(): void
     usort($routes, fn($a, $b) => strcmp($a['path'], $b['path']));
 
     $rows = [];
+    $unvalidated = [];
     foreach ($routes as $route) {
         $methods = implode('|', $route['methods']);
         $path = $route['path'];
@@ -341,6 +342,11 @@ function listRoutes(): void
         }
 
         $flags = [];
+        // Escritura sin expects: el handler recibe cualquier campo (riesgo de mass assignment)
+        if (empty($route['expects']) && array_intersect($route['methods'], ['POST', 'PUT', 'PATCH'])) {
+            $flags[] = 'NO-EXPECTS';
+            $unvalidated[] = implode('|', $route['methods']) . ' ' . $route['path'];
+        }
         if (!empty($route['guards'])) $flags[] = 'guard';
         if (!empty($route['transform'])) $flags[] = 'transform';
         if (!empty($route['onError'])) $flags[] = 'onError';
@@ -377,6 +383,13 @@ function listRoutes(): void
         echo "$line\n";
     }
     echo "\n";
+    if ($unvalidated) {
+        echo "  Aviso: rutas de escritura sin expects (reciben cualquier campo; riesgo de mass assignment):\n";
+        foreach ($unvalidated as $r) {
+            echo "    - $r\n";
+        }
+        echo "\n";
+    }
 }
 
 // ────────────────────────────────────────────────
@@ -891,6 +904,11 @@ function runTests(?string $filter = null): void
     Dotenv\Dotenv::createImmutable(getcwd())->safeLoad();
     if (file_exists(getcwd() . '/.env.' . ($_ENV['APP_ENV'] ?? 'development'))) {
         Dotenv\Dotenv::createImmutable(getcwd(), '.env.' . ($_ENV['APP_ENV'] ?? 'development'))->safeLoad();
+    }
+    // Sin APP_ENV la app asume producción; los tests corren como development salvo que se indique
+    if (($_ENV['APP_ENV'] ?? '') === '') {
+        $_ENV['APP_ENV'] = 'development';
+        putenv('APP_ENV=development');
     }
     if (strlen($_ENV['JWT_SECRET'] ?? '') < 32) {
         $_ENV['JWT_SECRET'] = bin2hex(random_bytes(32));

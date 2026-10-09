@@ -2,6 +2,8 @@
 namespace Plugins\Health;
 
 use Core\DB;
+use Core\ErrorHandler;
+use Core\Log;
 
 final class Health
 {
@@ -21,6 +23,12 @@ final class Health
             }
         }
 
+        // /health es público: fuera de development solo se muestra el estado de cada check
+        // (sin mensajes de error de la BD, espacio en disco ni tamaño de la cola)
+        if (!ErrorHandler::isDevelopment()) {
+            $checks = array_map(fn (array $check) => ['status' => $check['status']], $checks);
+        }
+
         return [
             'status' => $allOk ? 'ok' : 'degraded',
             'timestamp' => date('c'),
@@ -37,6 +45,7 @@ final class Health
 
             return ['status' => 'ok', 'latency_ms' => $ms];
         } catch (\Throwable $e) {
+            Log::error('health.database', ['error' => $e->getMessage()]);
             return ['status' => 'error', 'error' => $e->getMessage()];
         }
     }

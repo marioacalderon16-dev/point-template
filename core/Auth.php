@@ -19,6 +19,8 @@ final class Auth
         $payload = array_merge($claims, [
             'iat' => $now,
             'exp' => $now + ($ttl ?? (int) ($_ENV['JWT_TTL'] ?? 3600)),
+            'iss' => self::issuer(),
+            'aud' => self::audience(),
         ]);
 
         return JWT::encode($payload, self::secret(), 'HS256');
@@ -27,10 +29,27 @@ final class Auth
     public static function verify(string $token): ?array
     {
         try {
-            return (array) JWT::decode($token, new Key(self::secret(), 'HS256'));
+            $claims = (array) JWT::decode($token, new Key(self::secret(), 'HS256'));
         } catch (\Throwable) {
             return null;
         }
+        // Solo tokens emitidos por esta API: otro sistema que comparta el secreto (p. ej. el JWT
+        // de Supabase) firma con otro iss/aud
+        $aud = (array) ($claims['aud'] ?? []);
+        if (($claims['iss'] ?? null) !== self::issuer() || !in_array(self::audience(), $aud, true)) {
+            return null;
+        }
+        return $claims;
+    }
+
+    private static function issuer(): string
+    {
+        return $_ENV['JWT_ISSUER'] ?? 'point';
+    }
+
+    private static function audience(): string
+    {
+        return $_ENV['JWT_AUDIENCE'] ?? 'point-api';
     }
 
     /** ID del usuario autenticado (claim 'sub'). Solo en rutas con el middleware auth. */

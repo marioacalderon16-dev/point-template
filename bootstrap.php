@@ -38,9 +38,10 @@ ErrorHandler::register();
 Log::configure(__DIR__ . '/storage/logs', $_ENV['LOG_LEVEL'] ?? 'debug');
 Cache::configure(__DIR__ . '/storage/cache');
 
-// Fail-fast: en produccion, un JWT_SECRET sin configurar no debe esperar al primer login
-// para fallar (Auth::secret() ya lo valida, pero de forma perezosa).
-if (($_ENV['APP_ENV'] ?? 'development') === 'production') {
+// Fail-fast: fuera de development, un JWT_SECRET sin configurar no debe esperar al primer login
+// para fallar (Auth::secret() ya lo valida, pero de forma perezosa). En CLI sin APP_ENV (p. ej.
+// `point routes` en la plantilla, sin .env) no se exige: ahí no se sirven peticiones.
+if (!ErrorHandler::isDevelopment() && (PHP_SAPI !== 'cli' || isset($_ENV['APP_ENV']))) {
     Auth::assertConfigured();
 }
 
@@ -117,7 +118,7 @@ $lazy = false;
 
 if (!defined('POINT_NO_MANIFEST') && file_exists($manifestFile)) {
     $manifest = require $manifestFile;
-    $isDev = ($_ENV['APP_ENV'] ?? 'development') === 'development';
+    $isDev = ErrorHandler::isDevelopment();
 
     // En dev se verifica frescura contra los mtime; en produccion se confia en el manifiesto
     if (!$isDev || ($manifest['hash'] ?? '') === Core\RouteRegistry::endpointsHash($registry->getEndpointDirs())) {

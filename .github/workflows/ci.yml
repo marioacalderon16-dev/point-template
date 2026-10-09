@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Solo lectura del repo: el token del job no puede escribir aunque una dependencia se vea comprometida
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -48,9 +52,10 @@ jobs:
       DB_PASS: app
 
     steps:
-      - uses: actions/checkout@v5
+      # Acciones fijadas por SHA (una etiqueta se puede mover); el comentario indica la versión
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php-version }}
           extensions: pdo_sqlite, pdo_pgsql, pdo_mysql, pcntl
