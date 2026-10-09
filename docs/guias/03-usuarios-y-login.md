@@ -311,5 +311,5 @@ git add . && git commit -m "Guía 3: usuarios, login con JWT y proyectos con due
 - `Auth::id($input)` dice quién hace la petición. En rutas protegidas, guarda los campos uno a uno.
 - `->through('rate_limit:5')` limita los intentos.
 
-**Próximamente:** Guía 4, tareas con reglas de negocio (estados, fechas y prioridades). Mientras tanto,
-lo que sigue (tests, herramientas y despliegue) está en [la guía de inicio](../GUIA_INICIO.md).
+**Siguiente:** [Guía 4: tareas con reglas de negocio](04-tareas-y-reglas.md), donde las tareas tendrán
+estados, fechas y permisos que Point hace cumplir.

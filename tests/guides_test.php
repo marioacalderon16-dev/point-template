@@ -10,8 +10,8 @@ require_once __DIR__ . '/support/postgres.php';
 function guideBlocks(string $guide): array
 {
     $md = (string) file_get_contents(dirname(__DIR__) . "/docs/guias/$guide");
-    preg_match_all('/^```php file=(\S+)\n(.*?)^```/ms', $md, $m, PREG_SET_ORDER);
-    return array_map(fn ($b) => ['path' => $b[1], 'code' => $b[2]], $m);
+    preg_match_all('/^```php file=(\S+)(?: method=(\w+))?\n(.*?)^```/ms', $md, $m, PREG_SET_ORDER);
+    return array_map(fn ($b) => ['path' => $b[1], 'method' => $b[2] ?: null, 'code' => $b[3]], $m);
 }
 
 function guideApply(string $app, string $guide): void
@@ -19,6 +19,17 @@ function guideApply(string $app, string $guide): void
     foreach (guideBlocks($guide) as $b) {
         $file = "$app/{$b['path']}";
         @mkdir(dirname($file), 0755, true);
+        if ($b['method'] !== null) {
+            // Bloque "method=…": el lector reemplaza solo ese método del archivo
+            $src = (string) file_get_contents($file);
+            $start = strpos($src, "    public static function {$b['method']}(");
+            $end = $start === false ? false : strpos($src, "\n    }\n", $start);
+            if ($start === false || $end === false) {
+                throw new RuntimeException("No se encontró el método {$b['method']} en {$b['path']}");
+            }
+            file_put_contents($file, substr($src, 0, $start) . $b['code'] . substr($src, $end + 7));
+            continue;
+        }
         file_put_contents($file, $b['code']);
     }
 }
@@ -66,7 +77,7 @@ test('guías: cada bloque de código indica un archivo dentro del proyecto', fun
     }
 });
 
-test('guías 1-3: el proyecto Tareas funciona siguiendo los pasos en orden', function () {
+test('guías: el proyecto Tareas funciona siguiendo los pasos en orden', function () {
     $ran = withFreshPostgres(function (string $dsn, string $user, string $pass) {
         $db = [$dsn, $user, $pass];
         $root = dirname(__DIR__);
@@ -120,6 +131,47 @@ test('guías 1-3: el proyecto Tareas funciona siguiendo los pasos en orden', fun
             $project = guideData(guidePoint($app, $db, "call projects.create name=Intranet --as={$user['id']} --data"));
             expect($project['owner_id'])->toBe($user['id']);
             expect($project['description'])->toBeNull();
+            $u = $user['id'];
+            $p = $project['id'];
+
+            // Guía 4: tareas con fechas, regla propia, máquina de estados, guard y 409
+            guideApply($app, '04-tareas-y-reglas.md');
+            expect(guidePoint($app, $db, 'migrate')[0])->toContain('1 migraciones aplicadas');
+            $title = escapeshellarg('Diseñar portada');
+            $task = guideData(guidePoint($app, $db, "call tasks.create project_id=$p title=$title start_date=2030-01-07 due_date=2030-01-08 --as=$u --data"));
+            expect($task['status'])->toBe('open');
+            expect($task['priority'])->toBe(3);
+            expect($task['author_id'])->toBe($u);
+            expect(guidePoint($app, $db, "call tasks.create project_id=$p title=$title start_date=2030-01-08 due_date=2030-01-07 --as=$u")[1])->toBe(1);
+            [$weekend, $weekendCode] = guidePoint($app, $db, "call tasks.create project_id=$p title=$title due_date=2030-01-05 --as=$u");
+            expect($weekendCode)->toBe(1);
+            expect($weekend)->toContain('El campo due_date no puede caer en fin de semana.');
+            expect(guidePoint($app, $db, "call tasks.create project_id=$p title=$title due_date=2020-01-06 --as=$u")[1])->toBe(1);
+            expect(guidePoint($app, $db, "call tasks.create project_id=999 title=$title --as=$u")[1])->toBe(1);
+            expect(guidePoint($app, $db, "call tasks.create project_id=$p title=$title")[1])->toBe(1);
+
+            expect(count(guideData(guidePoint($app, $db, "call projects.tasks id=$p --data"))))->toBe(1);
+            expect(guideData(guidePoint($app, $db, "call projects.tasks id=$p status=done --data")))->toBe([]);
+            expect(guidePoint($app, $db, "call projects.tasks id=$p status=volando")[1])->toBe(1);
+
+            $t = $task['id'];
+            expect(guideData(guidePoint($app, $db, "call tasks.status id=$t status=in_progress --as=$u --data"))['from'])->toBe('open');
+            expect(guidePoint($app, $db, "call tasks.status id=$t status=done --as=$u")[1])->toBe(0);
+            [$cancel, $cancelCode] = guidePoint($app, $db, "call tasks.status id=$t status=cancelled --as=$u");
+            expect($cancelCode)->toBe(1);
+            expect($cancel)->toContain("No se puede pasar de 'done' a 'cancelled'. Permitidos: open.");
+            [$other] = guidePoint($app, $db, "call tasks.status id=$t status=open --as=" . ($u + 100));
+            expect($other)->toContain('403');
+            expect(guidePoint($app, $db, "call tasks.status id=9999 status=open --as=$u")[0])->toContain('Tarea no encontrada');
+
+            // Guía 5: los tests que escribe el lector pasan, y también la prueba de humo
+            guideApply($app, '05-tests-y-herramientas.md');
+            [$tests, $testsCode] = guidePoint($app, $db, 'test');
+            expect($tests)->toContain('7 tests, all passed');
+            expect($testsCode)->toBe(0);
+            [$smoke, $smokeCode] = guidePoint($app, $db, 'test --smoke');
+            expect($smoke)->toContain('sin errores 5xx');
+            expect($smokeCode)->toBe(0);
         } finally {
             shell_exec('rm -rf ' . escapeshellarg($dir));
         }
