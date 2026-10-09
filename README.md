@@ -27,13 +27,29 @@ Endpoint::from(__FILE__)
 
 - **Endpoints por archivo** con validación declarativa (`expects` y reglas reutilizables en
   `services/Rules.php`) y grupos de middleware (`public`, `protected` con JWT, `admin`/`staff` por rol).
-  Referencia de todos los métodos: [docs/REFERENCIA_ENDPOINT.md](docs/REFERENCIA_ENDPOINT.md).
 - **Base de datos** Postgres (Supabase, Neon…) o MySQL: query builder, migraciones y seeds.
 - **Autenticación JWT**, rate limiting, CORS y cabeceras de seguridad.
 - **Tests** con `php point test` (levanta su propio servidor; base aparte con `.env.testing`).
 - **Jobs en cola**, tareas programadas (`scheduler`) y plugins.
 - **Despliegue**: Dockerfile (Apache + PHP 8.5), Railway con migraciones automáticas y CI de
   GitHub Actions con un Postgres desechable.
+
+## Qué puede hacer un endpoint
+
+Cada función tiene su explicación y ejemplos en la [referencia](docs/REFERENCIA_ENDPOINT.md):
+
+| Necesitas… | Usa | Detalle |
+|---|---|---|
+| Validar datos, IDs y estados | `->expects([...])`, `Rules::id()`, `Rules::status()`, comparar campos | [Datos y validación](docs/REFERENCIA_ENDPOINT.md#2-datos-y-validación) |
+| Que un estado siga un flujo (`pending → paid → shipped`) | `Rules::transition()` | [Máquina de estados](docs/REFERENCIA_ENDPOINT.md#máquina-de-estados-rulestransition) |
+| Proteger rutas por token o rol | `->group('admin')`, `Auth::id()`, `Auth::hasRole()` | [Usuario y permisos](docs/REFERENCIA_ENDPOINT.md#4-usuario-y-permisos) |
+| Responder más rápido | `->cache(60)` | [Caché](docs/REFERENCIA_ENDPOINT.md#caché-cache) |
+| Que un pago o pedido no se duplique | `->idempotent()` | [Idempotencia](docs/REFERENCIA_ENDPOINT.md#idempotencia-idempotent) |
+| Procesos largos sin cortes por tiempo | `->asyncable()` + `GET /jobs/{id}` | [Asíncrono](docs/REFERENCIA_ENDPOINT.md#asíncrono-a-demanda-asyncable--async) |
+| Reutilizar la lógica (jobs, seeds, tests) | `php point make:action` | [Acciones](docs/REFERENCIA_ENDPOINT.md#acciones) |
+| Usar un endpoint desde scripts o el cron | `php point call` | [point call](docs/REFERENCIA_ENDPOINT.md#point-call) |
+| Que un asistente de IA use tu API | `->mcp('…')` + `php point mcp` | [point mcp](docs/REFERENCIA_ENDPOINT.md#point-mcp-asistentes-de-ia) |
+| Ver, probar y documentar las rutas | `routes`, `make:http`, `test --smoke`, `openapi --serve` | [Herramientas](docs/REFERENCIA_ENDPOINT.md#7-herramientas-de-terminal) |
 
 ## Requisitos
 

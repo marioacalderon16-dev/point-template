@@ -652,11 +652,15 @@ php point logs --date=2026-10-01      # otro día
 
 **Endpoints desde la terminal.** `php point call users.create name=Ana email=ana@example.com password=secreto123`
 ejecuta el endpoint con su validación y permisos (`--as=1` para actuar como un usuario). Ver
-[REFERENCIA_ENDPOINT.md](REFERENCIA_ENDPOINT.md#desde-la-terminal-y-para-asistentes-de-ia).
+[la referencia](REFERENCIA_ENDPOINT.md#point-call).
 
 **Trabajos en segundo plano.** Las rutas con `->asyncable()` o `->async()` y los jobs necesitan el worker:
 `php point work`. En desarrollo basta con `QUEUE_SYNC=true` en `.env`; en producción, el worker va como un
 proceso aparte (en Railway, un segundo servicio con el mismo repositorio y el comando `php point work`).
+
+**¿Y después?** La guía cubre lo esencial. El resto (caché, idempotencia, trabajos asíncronos, máquina de
+estados, CRUD en un archivo, asistentes de IA…) está explicado con ejemplos en
+[REFERENCIA_ENDPOINT.md](REFERENCIA_ENDPOINT.md).
 
 ## Paso 14: despliegue en Railway
 
