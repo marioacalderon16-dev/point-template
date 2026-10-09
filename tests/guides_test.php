@@ -60,6 +60,68 @@ function guidePoint(string $app, array $db, string $args): array
     return [implode("\n", $out), $code];
 }
 
+/** Ejecuta un comando cualquiera en el proyecto con el mismo entorno que guidePoint. */
+function guideExec(string $app, array $db, string $cmd): array
+{
+    $env = 'env -u POINT_TESTING APP_ENV=development DB_DSN=' . escapeshellarg($db[0])
+        . ' DB_USER=' . escapeshellarg($db[1]) . ' DB_PASS=' . escapeshellarg($db[2]);
+    exec('cd ' . escapeshellarg($app) . " && $env $cmd < /dev/null 2>&1", $out, $code);
+    return [implode("\n", $out), $code];
+}
+
+/** Servidor PHP del proyecto (subidas, cabeceras, asíncrono). Devuelve [puerto, proceso]. */
+function guideServer(string $app, array $db): array
+{
+    $sock = stream_socket_server('tcp://127.0.0.1:0');
+    $port = (int) substr((string) strrchr((string) stream_socket_get_name($sock, false), ':'), 1);
+    fclose($sock);
+    $env = array_merge(getenv(), ['APP_ENV' => 'development', 'DB_DSN' => $db[0], 'DB_USER' => $db[1], 'DB_PASS' => $db[2]]);
+    unset($env['POINT_TESTING']);
+    $null = ['file', '/dev/null', 'w'];
+    // Sin OPcache: el test reescribe archivos al instante y no debe servirse una versión compilada antigua
+    $proc = proc_open(['php', '-d', 'opcache.enable=0', '-d', 'opcache.enable_cli=0', '-S', "127.0.0.1:$port", 'index.php'], [0 => ['file', '/dev/null', 'r'], 1 => $null, 2 => $null], $pipes, $app, $env);
+    for ($i = 0; $i < 50; $i++) {
+        usleep(100000);
+        if ($fp = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.1)) {
+            fclose($fp);
+            break;
+        }
+    }
+    return [$port, $proc];
+}
+
+/** Petición al servidor del proyecto: [estado, cabeceras en minúsculas, cuerpo decodificado]. */
+function guideHttp(int $port, string $method, string $path, array $headers = [], ?array $json = null): array
+{
+    $lines = ['Content-Type: application/json'];
+    foreach ($headers as $k => $v) {
+        $lines[] = "$k: $v";
+    }
+    $ctx = stream_context_create(['http' => ['method' => $method, 'header' => implode("\r\n", $lines),
+        'content' => $json === null ? '' : json_encode($json), 'ignore_errors' => true, 'timeout' => 15]]);
+    $body = @file_get_contents("http://127.0.0.1:$port$path", false, $ctx);
+    $status = 0;
+    $h = [];
+    foreach (http_get_last_response_headers() ?? [] as $line) {
+        if (preg_match('#^HTTP/\S+\s+(\d+)#', $line, $m)) {
+            $status = (int) $m[1];
+        } elseif (str_contains($line, ':')) {
+            [$k, $v] = explode(':', $line, 2);
+            $h[strtolower(trim($k))] = trim($v);
+        }
+    }
+    return [$status, $h, json_decode((string) $body, true)];
+}
+
+/** Subida multipart con curl: [estado, cuerpo decodificado]. */
+function guideUpload(int $port, string $path, string $file, string $token): array
+{
+    $out = (string) shell_exec('curl -s -w ' . escapeshellarg('\n%{http_code}') . ' -X POST -H ' . escapeshellarg("Authorization: Bearer $token")
+        . ' -F ' . escapeshellarg("file=@$file") . ' ' . escapeshellarg("http://127.0.0.1:$port$path"));
+    $pos = strrpos($out, "\n");
+    return [(int) substr($out, $pos + 1), json_decode(substr($out, 0, $pos), true)];
+}
+
 function guideData(array $result): mixed
 {
     return json_decode($result[0], true);
@@ -172,6 +234,87 @@ test('guías: el proyecto Tareas funciona siguiendo los pasos en orden', functio
             [$smoke, $smokeCode] = guidePoint($app, $db, 'test --smoke');
             expect($smoke)->toContain('sin errores 5xx');
             expect($smokeCode)->toBe(0);
+
+            // Guía 6: roles, recurso de etiquetas, panel y adjuntos
+            guideApply($app, '06-roles-crud-y-panel.md');
+            expect(guidePoint($app, $db, 'migrate')[0])->toContain('3 migraciones aplicadas');
+            expect(guidePoint($app, $db, 'seed')[0])->toContain('1 seeds ejecutados');
+            $adminLogin = guideData(guidePoint($app, $db, 'call login email=admin@example.com password=admin12345 --data'));
+            $claims = json_decode((string) base64_decode(strtr(explode('.', $adminLogin['token'])[1], '-_', '+/')), true);
+            expect($claims['role'])->toBe('admin');
+            expect(guidePoint($app, $db, "call users.list --as=$u")[0])->toContain('403');
+            expect(count(guideData(guidePoint($app, $db, "call users.list --as={$claims['sub']} --role=admin --data"))))->toBeGreaterThan(1);
+
+            $label = guideData(guidePoint($app, $db, "call labels.create name=Urgente color=#ff0000 --as=$u --role=editor --data"));
+            expect($label['color'])->toBe('#ff0000');
+            expect(guidePoint($app, $db, "call labels.create name=Urgente color=rojo --as=$u --role=editor")[1])->toBe(1);
+            expect(guidePoint($app, $db, "call labels.list --as=$u")[0])->toContain('403');
+            $l = $label['id'];
+            $renamed = guideData(guidePoint($app, $db, "call labels.update id=$l name=" . escapeshellarg('Muy urgente') . " color=#00ff00 --as=$u --role=editor --data"));
+            expect($renamed['name'])->toBe('Muy urgente');
+            expect(guideData(guidePoint($app, $db, "call labels.show id=$l --as=$u --role=admin --data"))['color'])->toBe('#00ff00');
+            expect(guidePoint($app, $db, "call labels.delete id=$l --as=$u --role=admin")[1])->toBe(0);
+            expect(guidePoint($app, $db, "call labels.show id=$l --as=$u --role=admin")[0])->toContain('Etiqueta no encontrada');
+
+            $dash = guideData(guidePoint($app, $db, "call dashboard --as=$u --data"));
+            expect($dash['projects'])->toBeGreaterThan(0);
+            expect($dash['tasks']['done'])->toBe(1);
+            expect($dash['overdue'])->toBe(0);
+
+            [$port, $server] = guideServer($app, $db);
+            try {
+                $token = Core\Auth::issue(['sub' => $u]);
+                $png = tempnam(sys_get_temp_dir(), 'g6') . '.png';
+                file_put_contents($png, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='));
+                $fake = tempnam(sys_get_temp_dir(), 'g6') . '.png';
+                file_put_contents($fake, '<?php echo "no soy una imagen";');
+                [$upStatus, $upBody] = guideUpload($port, "/tasks/$t/attachments", $png, $token);
+                expect($upStatus)->toBe(201);
+                expect(is_file("$app/storage/uploads/{$upBody['data']['path']}"))->toBeTrue();
+                expect(guideUpload($port, "/tasks/$t/attachments", $fake, $token)[0])->toBe(422);
+                expect(guideUpload($port, '/tasks/9999/attachments', $png, $token)[0])->toBe(404);
+                expect(guideUpload($port, "/tasks/$t/attachments", $png, 'token-falso')[0])->toBe(401);
+
+                // Guía 7: caché, idempotencia, evento, job, scheduler y exportación asíncrona
+                guideApply($app, '07-rendimiento-y-segundo-plano.md');
+                $auth = ['Authorization' => "Bearer $token"];
+                expect(guideHttp($port, 'GET', '/dashboard', $auth)[1]['x-cache'] ?? null)->toBe('MISS');
+                expect(guideHttp($port, 'GET', '/dashboard', $auth)[1]['x-cache'] ?? null)->toBe('HIT');
+
+                $key = ['Idempotency-Key' => 'guia7-' . bin2hex(random_bytes(4))];
+                $first = guideHttp($port, 'POST', '/tasks', $auth + $key, ['project_id' => $p, 'title' => 'Preparar demo']);
+                $again = guideHttp($port, 'POST', '/tasks', $auth + $key, ['project_id' => $p, 'title' => 'Preparar demo']);
+                expect($first[0])->toBe(201);
+                expect($again[2]['data']['id'])->toBe($first[2]['data']['id']);
+                expect($again[1]['idempotent-replayed'] ?? null)->toBe('true');
+
+                $log = fn () => (string) @file_get_contents("$app/storage/logs/" . date('Y-m-d') . '.log');
+                expect($log())->toContain('aviso.tarea_creada');
+                expect($log())->toContain('marta@example.com');
+
+                (new PDO($dsn, $db[1], $db[2]))->exec("UPDATE tasks SET due_date = '2020-01-06', status = 'open' WHERE id = $t");
+                $dispatch = 'php -r ' . escapeshellarg('define("POINT_NO_ROUTES", 1); require "vendor/autoload.php"; require "bootstrap.php"; dispatch(App\Jobs\RemindOverdueTasks::class);');
+                expect(guideExec($app, $db, $dispatch)[1])->toBe(0);
+                expect(guidePoint($app, $db, 'work --once')[1])->toBe(0);
+                expect($log())->toContain('recordatorio.tarea_vencida');
+                expect(guideExec($app, $db, 'php scheduler list')[0])->toContain('Recordar tareas vencidas');
+
+                $sync = guideHttp($port, 'POST', "/projects/$p/export", $auth);
+                expect($sync[0])->toBe(200);
+                $rows = $sync[2]['data']['rows'];
+                expect($rows)->toBeGreaterThan(1);
+                $async = guideHttp($port, 'POST', "/projects/$p/export", $auth + ['Prefer' => 'respond-async']);
+                expect($async[0])->toBe(202);
+                expect(guidePoint($app, $db, 'work --once')[1])->toBe(0);
+                $job = guideHttp($port, 'GET', '/jobs/' . $async[2]['job'], $auth)[2];
+                expect($job['state'])->toBe('done');
+                expect($job['progress'])->toBe(100);
+                expect($job['result']['data']['rows'])->toBe($rows);
+                expect(str_starts_with($job['result']['data']['csv'], "id,title,status,priority,due_date\n"))->toBeTrue();
+            } finally {
+                proc_terminate($server);
+                proc_close($server);
+            }
         } finally {
             shell_exec('rm -rf ' . escapeshellarg($dir));
         }

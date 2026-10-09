@@ -274,5 +274,5 @@ git add . && git commit -m "Guía 5: tests de proyectos y tareas"
 - `make:http`, `openapi --serve` y `logs` ayudan a probar, documentar y depurar.
 - `point call` lleva tus endpoints a scripts y al cron.
 
-**Próximamente:** Guía 6, roles, CRUD y panel. Mientras tanto, el despliegue está en
-[la guía de inicio](../GUIA_INICIO.md#despliegue-en-railway).
+**Siguiente:** [Guía 6: roles, CRUD y panel](06-roles-crud-y-panel.md), donde cada usuario tendrá un rol
+y la API ganará un panel y archivos adjuntos.

@@ -11,8 +11,8 @@ concreta, usa la [referencia](REFERENCIA_ENDPOINT.md).
 | 3 | [Usuarios y login](guias/03-usuarios-y-login.md) | Registro, login, `GET /me` y proyectos con dueño | Contraseñas, acciones, JWT, grupo `protected`, `Auth::id()`, límite de intentos | 30 min |
 | 4 | [Tareas con reglas de negocio](guias/04-tareas-y-reglas.md) | Tareas con estados, fechas y prioridad | Comparar campos, máquina de estados, reglas propias, `guard`, `onError` | 30 min |
 | 5 | [Tests y herramientas](guias/05-tests-y-herramientas.md) | Tests del proyecto y documentación | `make:test`, prueba de humo, `make:http`, Swagger, logs | 20 min |
-| 6 | Roles, CRUD y panel *(próximamente)* | Roles, CRUD de proyectos, panel y adjuntos | Grupos y roles, `Endpoint::resource`, agregador, `connectTo`, archivos | 35 min |
-| 7 | Rendimiento y segundo plano *(próximamente)* | Caché, altas sin duplicados, exportación en segundo plano, avisos y recordatorios | `cache`, `idempotent`, asíncrono, jobs, eventos, scheduler, plugins | 40 min |
+| 6 | [Roles, CRUD y panel](guias/06-roles-crud-y-panel.md) | Roles, etiquetas (CRUD completo), panel y adjuntos | Grupos y roles, `Endpoint::resource`, agregador, `connectTo`, archivos | 35 min |
+| 7 | [Rendimiento y segundo plano](guias/07-rendimiento-y-segundo-plano.md) | Caché, altas sin duplicados, exportación en segundo plano, avisos y recordatorios | `cache`, `idempotent`, asíncrono, jobs, eventos, scheduler, plugins | 40 min |
 | 8 | A producción *(próximamente)* | Despliegue y asistente de IA | Docker, Railway (web + worker), CI, `point mcp` | 30 min |
 
 **Necesitas:** PHP 8.4 o superior, [Composer](https://getcomposer.org/), git y (desde la guía 2) una
@@ -20,14 +20,11 @@ base de datos Postgres o MySQL.
 
 ---
 
-## Mientras se completan las guías 6 a 8
+## Mientras se completa la guía 8
 
-Estos apartados siguen el proyecto de la guía 5 y pasarán a sus guías cuando estén listas.
-
-**Trabajos en segundo plano.** Las rutas con `->asyncable()` o `->async()` y los jobs necesitan el worker:
-`php point work`. En desarrollo basta con `QUEUE_SYNC=true` en `.env`; en producción, el worker va como un
-proceso aparte (en Railway, un segundo servicio con el mismo repositorio y el comando `php point work`).
-Ver [la referencia](REFERENCIA_ENDPOINT.md#asíncrono-a-demanda-asyncable--async).
+El despliegue sigue el proyecto de la guía 7 y pasará a la guía 8 cuando esté lista. Recuerda que, si
+usas jobs, trabajos asíncronos o el scheduler, en producción el worker (`php point work`) va como un
+proceso aparte.
 
 ## Despliegue en Railway
 
