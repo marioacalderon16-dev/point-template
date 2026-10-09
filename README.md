@@ -97,8 +97,8 @@ php point serve 8080
 curl http://localhost:8080/health
 ```
 
-**Guía completa paso a paso** (base de datos, migraciones, endpoints, tests, login con JWT y
-despliegue en Railway): [docs/GUIA_INICIO.md](docs/GUIA_INICIO.md).
+**Guías paso a paso:** [docs/GUIA_INICIO.md](docs/GUIA_INICIO.md) reúne una serie de guías cortas que
+construyen una API de proyectos y tareas, desde «hola mundo» hasta producción.
 
 ## Comandos principales
 
