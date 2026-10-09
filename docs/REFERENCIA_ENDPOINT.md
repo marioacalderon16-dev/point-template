@@ -60,7 +60,7 @@ Una ruta que no existe responde 404; si existe con otro método, 405 con la cabe
 | `cache(60)` | Guarda la respuesta GET esos segundos. La clave incluye ruta, campos validados y usuario; solo guarda respuestas 2xx. Cabecera `X-Cache: HIT/MISS` | `->at('GET /stats')->cache(60)` |
 | `transform(fn)` | Modifica la respuesta de `handle` antes de enviarla | `->transform(fn ($res) => $res + ['version' => 1])` |
 | `onError(fn)` | Respuesta propia si algo lanza una excepción | `->onError(fn (Throwable $e) => Response::error('No disponible', 503))` |
-| `connectTo('nombre')` | Encadena otro endpoint por nombre: la respuesta de este es el input del siguiente | `->connectTo('posts.notify')` |
+| `connectTo('nombre')` | Encadena otro endpoint por nombre: la respuesta de este es el input del siguiente y solo se devuelve la del último (para juntar datos, ver la receta «Una pantalla, una petición») | `->connectTo('posts.notify')` |
 | `when(fn)` | Tras `connectTo`: solo encadena si devuelve `true` (recibe la respuesta) | `->connectTo('audit.log')->when(fn ($res) => $res['status'] === 201)` |
 | `handle(fn)` | La lógica. También acepta `[Clase::class, 'método']` | `->handle([PostController::class, 'update'])` |
 
@@ -100,6 +100,36 @@ if ($v->passes()) (new CreateUser)($v->validated());
 Regla: la acción **no sabe nada de HTTP**. No usa `Response::` (devuelve datos), no lee `$_GET` ni
 `$input['_user']`. Si necesita al usuario, se le pasa: `(new CreatePost)($in, authorId: Auth::id($in))`.
 Si tiene dependencias en el constructor, se resuelven con `service(CreateUser::class)` o `->uses()`.
+
+## Receta: una pantalla, una petición
+
+Cuando una pantalla del frontend necesita datos de varias rutas (`/me`, `/posts`, `/stats`), un
+endpoint agregador los junta en una sola respuesta llamando a las **mismas acciones** que usan esas
+rutas. No duplica lógica y ahorra viajes de red:
+
+```php
+// endpoints/dashboard.php
+Endpoint::from(__FILE__)->at('GET /dashboard')->group('protected')->cache(30)
+    ->handle(fn ($in) => Response::ok([
+        'me'    => (new GetUser)(Auth::id($in)),
+        'posts' => (new ListPosts)(['limit' => 5]),
+        'stats' => (new GetStats)(),
+    ]));
+```
+
+- Los permisos son los del endpoint agregador. Si una parte exige un rol, compruébalo aquí
+  (`->group('admin')` o `Auth::hasRole($in, 'admin')`).
+- `->cache(30)` guarda el panel completo, por usuario.
+- **No uses `connectTo()` para esto.** Es una cadena: cada endpoint recibe la salida del anterior,
+  filtrada por su `expects`, y solo llega la respuesta del último. Sirve para flujos («crear el
+  pedido → notificar»), no para juntar datos.
+
+```
+connectTo:  A ──► B ──► C ──► (solo C)
+agregador:  ┌► acción A ─┐
+            ├► acción B ─┼──► { a, b, c }
+            └► acción C ─┘
+```
 
 ## Recursos CRUD en un archivo
 
