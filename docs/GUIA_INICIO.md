@@ -236,6 +236,8 @@ Endpoint::from(__FILE__)
 
 `expects` valida el cuerpo antes de `handle`; si falla responde 422 sin tocar la base de datos.
 Con `php point routes` se ven todas las rutas, quién puede llamarlas (`public`, `token`, `roles: …`) y sus campos.
+`php point make:http` genera `requests.http` con una petición de ejemplo por ruta, que se lanza con un
+clic desde VS Code (extensión REST Client) o PhpStorm. Las rutas protegidas usan la variable `@token`.
 Convención REST: misma ruta, distinto método (`GET` lista, `POST` crea) y **201** al crear.
 
 ```bash
@@ -468,12 +470,39 @@ Es `nullable` porque los usuarios existentes no tienen contraseña (no podrán h
 
 ### 13.2 Registro con hash
 
-`endpoints/users/create.php`:
+La lógica de crear un usuario (cifrar la contraseña y guardar) va en una **acción**: un archivo
+aparte, sin nada de HTTP, que pueden reutilizar este endpoint, un endpoint de administración, un
+job de importación, un seed o un test.
+
+```bash
+php point make:action CreateUser
+```
+
+`services/Actions/CreateUser.php`:
+
+```php
+<?php
+declare(strict_types=1);
+namespace App\Services\Actions;
+
+use Core\DB;
+
+final class CreateUser
+{
+    public function __invoke(array $data): array
+    {
+        $data['password'] = password_hash($data['password'], PASSWORD_DEFAULT);
+        return DB::table('users')->insertReturning($data, 'id, name, email, bio');
+    }
+}
+```
+
+`endpoints/users/create.php` solo se ocupa de lo HTTP (ruta, acceso, validación y respuesta):
 
 ```php
 <?php
 
-use Core\DB;
+use App\Services\Actions\CreateUser;
 use Core\Endpoint;
 use Core\Response;
 
@@ -487,17 +516,12 @@ Endpoint::from(__FILE__)
         'password' => 'required|string|min:8|max:72',
         'bio'      => 'optional|string|max:500',
     ])
-    ->handle(function ($input) {
-        $input['password'] = password_hash($input['password'], PASSWORD_DEFAULT);
-        $user = DB::table('users')->insertReturning($input, 'id, name, email, bio');
-
-        return Response::created($user);
-    });
+    ->handle(fn ($input) => Response::created((new CreateUser)($input)));
 ```
 
 - **Todo campo que se guarde debe estar en `expects`**: los no declarados se descartan en
   silencio (sin `password` en `expects`, el usuario se crea con `password` NULL).
-- **La línea `password_hash` es obligatoria**: sin ella la contraseña queda en texto plano y el
+- **La línea `password_hash` de la acción es obligatoria**: sin ella la contraseña queda en texto plano y el
   login siempre responde 401. En la tabla, un hash válido empieza por `$2y$` y mide 60 caracteres.
 - El `RETURNING` no incluye `password` (el hash nunca sale en la respuesta). 72 es el límite de bcrypt.
 

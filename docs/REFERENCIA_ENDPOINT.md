@@ -6,6 +6,8 @@ Todo lo que puede hacer un endpoint en una página. Para el recorrido paso a pas
 ```bash
 php point make:endpoint posts/update --put   # crea endpoints/posts/update.php con esta estructura
 php point routes                             # lista las rutas: grupo, quién puede entrar y campos
+php point make:action CreateUser             # lógica reutilizable en services/Actions/CreateUser.php
+php point make:http                          # requests.http con una petición de ejemplo por ruta
 ```
 
 ## Estructura
@@ -70,6 +72,24 @@ Las claves que empiezan por `_` están reservadas para los middlewares: si el cl
 descartan. **Una ruta POST/PUT/PATCH sin `expects` recibe cualquier campo**, y
 `DB::table(...)->insert($input)` guardaría también lo que no esperas (`role`, `is_admin`…).
 `php point routes` marca esas rutas con `NO-EXPECTS`.
+
+## Lógica reutilizable: acciones
+
+La lógica del negocio va en una acción (`php point make:action CreateUser` crea
+`services/Actions/CreateUser.php`). El endpoint se queda con lo HTTP y la acción se puede llamar
+desde cualquier sitio:
+
+```php
+// endpoint
+->handle(fn ($in) => Response::created((new CreateUser)($in)))
+
+// job, seed, otro endpoint o test
+(new CreateUser)(['name' => 'Ana', 'email' => 'ana@example.com', 'password' => 'secreto123']);
+```
+
+Regla: la acción **no sabe nada de HTTP**. No usa `Response::` (devuelve datos), no lee `$_GET` ni
+`$input['_user']`. Si necesita al usuario, se le pasa: `(new CreatePost)($in, authorId: Auth::id($in))`.
+Si tiene dependencias en el constructor, se resuelven con `service(CreateUser::class)` o `->uses()`.
 
 ## Recursos CRUD en un archivo
 

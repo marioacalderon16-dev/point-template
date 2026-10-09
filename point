@@ -20,6 +20,8 @@ match ($command) {
     'make:endpoint' => createEndpoint(array_slice($argv, 2)),
     'make:middleware' => createMiddleware($argv[2] ?? null),
     'make:service' => createService($argv[2] ?? null),
+    'make:action' => createAction($argv[2] ?? null),
+    'make:http' => makeHttp(array_slice($argv, 2)),
     'make:job' => createJob($argv[2] ?? null),
     'make:listener' => createListener($argv[2] ?? null),
     'make:test' => createTest($argv[2] ?? null),
@@ -231,6 +233,9 @@ vendor/
 .env
 .env.*
 !.env.example
+
+# make:http (puede contener un token pegado a mano)
+requests.http
 
 # Cache y storage
 cache/
@@ -792,6 +797,136 @@ PHP;
 // ────────────────────────────────────────────────
 // MAKE:SERVICE
 // ────────────────────────────────────────────────
+
+function createAction(?string $name): void
+{
+    // create-user, create_user o CreateUser → CreateUser
+    $className = (string) preg_replace('/[^a-zA-Z0-9]/', '', ucwords((string) preg_replace('/[-_\s]+/', ' ', (string) $name)));
+    if ($className === '' || !preg_match('/^[A-Z]/', $className)) {
+        echo "Uso: php point make:action NombreAccion (ej: CreateUser)\n";
+        exit(1);
+    }
+
+    $filename = "services/Actions/$className.php";
+    if (file_exists($filename)) {
+        echo "Ya existe: $filename\n";
+        exit(1);
+    }
+    if (!is_dir('services/Actions')) {
+        mkdir('services/Actions', 0755, true);
+    }
+
+    $content = <<<PHP
+<?php
+declare(strict_types=1);
+namespace App\Services\Actions;
+
+/**
+ * Una operación del negocio, reutilizable desde endpoints, jobs, seeds o tests.
+ * No sabe nada de HTTP: recibe datos y devuelve datos (sin Response:: ni \$_GET ni \$input['_user']).
+ *
+ * Uso en un endpoint:
+ *   ->handle(fn (\$in) => Response::ok((new $className)(\$in)))
+ * Uso en cualquier otro sitio:
+ *   (new $className)(['campo' => 'valor']);
+ */
+final class $className
+{
+    public function __invoke(array \$data): array
+    {
+        // Lógica de la operación (p. ej. DB::table('...')->insertReturning(\$data, 'id'))
+        return \$data;
+    }
+}
+PHP;
+
+    file_put_contents($filename, "$content\n");
+    echo "Acción creada: $filename\n";
+}
+
+/** Valor de ejemplo para un campo según sus reglas (requests.http). */
+function sampleValue(string $field, array $rules): mixed
+{
+    $schema = rulesToSchema($rules);
+    if (!empty($schema['enum'])) {
+        return $schema['enum'][0];
+    }
+    return match ($schema['format'] ?? $schema['type']) {
+        'email' => 'ana@example.com',
+        'uuid' => '00000000-0000-4000-8000-000000000000',
+        'date' => date('Y-m-d'),
+        'uri' => 'https://example.com',
+        'integer' => 1,
+        'number' => 1.5,
+        'boolean' => true,
+        'array' => [],
+        default => $field,
+    };
+}
+
+function makeHttp(array $args): void
+{
+    requireProject();
+
+    $file = 'requests.http';
+    foreach ($args as $arg) {
+        if (str_starts_with($arg, '--output=')) {
+            $file = substr($arg, 9);
+        }
+    }
+    if (file_exists($file) && !in_array('--force', $args, true)) {
+        echo "Ya existe $file (usa --force para regenerarlo; se perderán los cambios a mano).\n";
+        exit(1);
+    }
+
+    $routes = \Core\RouteRegistry::getInstance()->getRoutes();
+    usort($routes, fn ($a, $b) => strcmp($a['path'], $b['path']));
+
+    $port = $_ENV['APP_PORT'] ?? '8080';
+    $out = "# Generado con `php point make:http`. Ábrelo con REST Client (VS Code) o el cliente HTTP de PhpStorm.\n"
+        . "# Pega un token en @token (por ejemplo, la respuesta de tu endpoint de login).\n"
+        . "# Está en .gitignore: no lo subas al repositorio si contiene un token real.\n\n"
+        . "@baseUrl = http://localhost:$port\n@token = PEGA_AQUI_UN_TOKEN\n";
+
+    foreach ($routes as $route) {
+        preg_match_all('/\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}/', $route['path'], $m);
+        $pathParams = $m[1];
+        $access = routeAccess($route);
+
+        foreach ($route['methods'] as $method) {
+            $path = preg_replace('/\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}/', '1', $route['path']);
+            $fields = [];
+            foreach ($route['expects'] ?? [] as $field => $ruleString) {
+                if (in_array($field, $pathParams, true)) {
+                    continue;
+                }
+                $rules = is_array($ruleString) ? array_values($ruleString) : explode('|', $ruleString);
+                if (array_filter($rules, fn ($r) => $r === 'file')) {
+                    continue; // los archivos no se pueden enviar en JSON
+                }
+                $fields[$field] = sampleValue($field, $rules);
+            }
+
+            $hasBody = in_array($method, ['POST', 'PUT', 'PATCH'], true);
+            if (!$hasBody && $fields) {
+                $path .= '?' . http_build_query(array_map(fn ($v) => is_bool($v) ? ($v ? 'true' : 'false') : $v, $fields));
+            }
+
+            $title = ($route['name'] ?? null) ? "{$route['name']} · {$access['label']}" : $access['label'];
+            $out .= "\n### $method {$route['path']} ($title)\n$method {{baseUrl}}$path\n";
+            if ($access['protected']) {
+                $out .= "Authorization: Bearer {{token}}\n";
+            }
+            if ($hasBody) {
+                $out .= "Content-Type: application/json\n\n"
+                    . json_encode((object) $fields, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+            }
+        }
+    }
+
+    file_put_contents($file, $out);
+    printf("%s generado (%d rutas)\n", $file, count($routes));
+}
 
 function createService(?string $name): void
 {
@@ -1707,6 +1842,8 @@ Comandos:
   make:endpoint <ruta> [opts]  Crear un nuevo endpoint
   make:middleware <nombre>     Crear un nuevo middleware
   make:service <nombre>        Crear un nuevo service
+  make:action <Nombre>         Crear services/Actions/<Nombre>.php (lógica reutilizable, sin HTTP)
+  make:http [--force] [--output=archivo]  Generar requests.http con todas las rutas (REST Client / PhpStorm)
   make:job <nombre>            Crear un nuevo job
   make:listener <nombre>       Crear un nuevo listener
   make:test <nombre>           Crear tests/<nombre>_test.php

@@ -92,6 +92,7 @@ test('parche 25: init copia Rules.php y la config de middleware con public, auth
     withInitProject(function (string $app) {
         expect(file_exists("$app/services/Rules.php"))->toBeTrue();
         expect(file_exists("$app/docs/REFERENCIA_ENDPOINT.md"))->toBeTrue();
+        expect((string) file_get_contents("$app/.gitignore"))->toContain('requests.http');
         $groups = (require "$app/config/middleware.php")['groups'];
         foreach (['public', 'protected', 'authenticated', 'admin', 'staff'] as $group) {
             expect(array_key_exists($group, $groups))->toBeTrue();

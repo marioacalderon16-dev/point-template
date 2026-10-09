@@ -91,11 +91,13 @@ despliegue en Railway): [docs/GUIA_INICIO.md](docs/GUIA_INICIO.md).
 | `php point init <ruta>` | Crea un proyecto nuevo |
 | `php point serve [puerto]` | Servidor de desarrollo |
 | `php point make:endpoint <ruta>` | Crea un endpoint (`--post`, `--public`, …) |
+| `php point make:action <Nombre>` | Crea una acción: lógica reutilizable sin HTTP en `services/Actions/` |
 | `php point make:migration <tabla>` | Crea una migración |
 | `php point migrate` / `rollback` | Aplica / deshace migraciones |
 | `php point make:seed <tabla>` / `seed` | Crea / ejecuta datos iniciales |
 | `php point make:test <nombre>` | Crea un archivo de tests |
 | `php point test [filtro]` | Ejecuta los tests |
+| `php point make:http` | Genera `requests.http` para probar cada ruta desde VS Code o PhpStorm |
 | `php point routes` | Lista las rutas: grupo, quién puede entrar (public, token, roles) y campos |
 | `php point openapi --serve` | Documentación OpenAPI con Swagger UI |
 | `php point plugin:list` | Plugins disponibles |
