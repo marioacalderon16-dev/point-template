@@ -9,6 +9,7 @@ autenticación, tests, CI y despliegue con Docker.
 
 use Core\DB;
 use Core\Endpoint;
+use Core\Response;
 
 Endpoint::from(__FILE__)
     ->at('POST /users')
@@ -17,16 +18,16 @@ Endpoint::from(__FILE__)
         'name'  => 'required|string|min:2',
         'email' => 'required|email|unique:users,email',
     ])
-    ->handle(fn ($input) => [
-        'status' => 201,
-        'data'   => DB::table('users')->insertReturning($input, 'id, name, email'),
-    ]);
+    ->handle(fn ($input) => Response::created(
+        DB::table('users')->insertReturning($input, 'id, name, email')
+    ));
 ```
 
 ## Qué incluye
 
-- **Endpoints por archivo** con validación declarativa (`expects`) y grupos de middleware
-  (`public`, `protected` con JWT, `admin` por rol).
+- **Endpoints por archivo** con validación declarativa (`expects` y reglas reutilizables en
+  `services/Rules.php`) y grupos de middleware (`public`, `protected` con JWT, `admin`/`staff` por rol).
+  Referencia de todos los métodos: [docs/REFERENCIA_ENDPOINT.md](docs/REFERENCIA_ENDPOINT.md).
 - **Base de datos** Postgres (Supabase, Neon…) o MySQL: query builder, migraciones y seeds.
 - **Autenticación JWT**, rate limiting, CORS y cabeceras de seguridad.
 - **Tests** con `php point test` (levanta su propio servidor; base aparte con `.env.testing`).
@@ -95,7 +96,7 @@ despliegue en Railway): [docs/GUIA_INICIO.md](docs/GUIA_INICIO.md).
 | `php point make:seed <tabla>` / `seed` | Crea / ejecuta datos iniciales |
 | `php point make:test <nombre>` | Crea un archivo de tests |
 | `php point test [filtro]` | Ejecuta los tests |
-| `php point routes` | Lista las rutas registradas |
+| `php point routes` | Lista las rutas: grupo, quién puede entrar (public, token, roles) y campos |
 | `php point openapi --serve` | Documentación OpenAPI con Swagger UI |
 | `php point plugin:list` | Plugins disponibles |
 

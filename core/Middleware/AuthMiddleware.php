@@ -24,7 +24,7 @@ class AuthMiddleware
         // contenga al menos uno de los roles permitidos
         if ($params) {
             $allowedRoles = array_map('trim', explode(',', $params));
-            if (array_intersect(self::userRoles($claims), $allowedRoles) === []) {
+            if (array_intersect(Auth::rolesFromClaims($claims), $allowedRoles) === []) {
                 self::deny('Permisos insuficientes', 403);
             }
         }
@@ -44,19 +44,5 @@ class AuthMiddleware
         }
         echo json_encode(['status' => $code, 'message' => $message], JSON_UNESCAPED_UNICODE);
         exit;
-    }
-
-    /** @return list<string> */
-    private static function userRoles(array $claims): array
-    {
-        $roles = is_string($claims['role'] ?? null) ? [$claims['role']] : [];
-        if (is_array($claims['roles'] ?? null)) {
-            foreach ($claims['roles'] as $role) {
-                if (is_string($role)) {
-                    $roles[] = $role;
-                }
-            }
-        }
-        return $roles;
     }
 }

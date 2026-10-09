@@ -194,6 +194,9 @@ function init(?string $name): void
     copy("$source/config/middleware.php", "$name/config/middleware.php");
     // Reglas de validación reutilizables (Rules::custom() se registra en bootstrap.php)
     copy("$source/services/Rules.php", "$name/services/Rules.php");
+    // Referencia de endpoints (la plantilla de make:endpoint la enlaza)
+    mkdir("$name/docs", 0755, true);
+    copy("$source/docs/REFERENCIA_ENDPOINT.md", "$name/docs/REFERENCIA_ENDPOINT.md");
 
     $servicesConfig = <<<'PHP'
 <?php
@@ -275,6 +278,38 @@ function serve(string $port): void
 // ROUTES
 // ────────────────────────────────────────────────
 
+/**
+ * Quién puede llamar a una ruta según su grupo y sus middlewares 'through':
+ * 'public', 'token' o 'roles: a,b'. Un grupo no declarado se marca (responde 500, parche 17).
+ * @return array{protected: bool, label: string}
+ */
+function routeAccess(array $route): array
+{
+    $group = $route['group'] ?? null;
+    if ($group && !\Core\Middleware\MiddlewareManager::hasGroup($group)) {
+        return ['protected' => true, 'label' => "UNDEFINED GROUP '$group'"];
+    }
+    $middlewares = array_merge(
+        $group ? \Core\Middleware\MiddlewareManager::getGroup($group) : [],
+        $route['through'] ?? []
+    );
+    $roles = [];
+    $auth = false;
+    foreach ($middlewares as $m) {
+        if (!is_string($m) || ($m !== 'auth' && !str_starts_with($m, 'auth:'))) {
+            continue;
+        }
+        $auth = true;
+        if (str_starts_with($m, 'auth:')) {
+            $roles = array_merge($roles, array_map('trim', explode(',', substr($m, 5))));
+        }
+    }
+    if (!$auth) {
+        return ['protected' => false, 'label' => 'public'];
+    }
+    return ['protected' => true, 'label' => $roles ? 'roles: ' . implode(',', array_unique($roles)) : 'token'];
+}
+
 function listRoutes(): void
 {
     requireProject();
@@ -311,11 +346,13 @@ function listRoutes(): void
         if (!empty($route['onError'])) $flags[] = 'onError';
         $flagStr = $flags ? '[' . implode(',', $flags) . ']' : '';
 
-        $rows[] = [$methods, $path, $name, $group, $pipeline, $flagStr];
+        $fields = implode(', ', array_keys($route['expects'] ?? [])) ?: '-';
+
+        $rows[] = [$methods, $path, $name, $group, routeAccess($route)['label'], $fields, $pipeline, $flagStr];
     }
 
-    $widths = [6, 4, 4, 5, 8, 5];
-    $headers = ['METHOD', 'PATH', 'NAME', 'GROUP', 'PIPELINE', 'FLAGS'];
+    $headers = ['METHOD', 'PATH', 'NAME', 'GROUP', 'ACCESS', 'FIELDS', 'PIPELINE', 'FLAGS'];
+    $widths = array_fill(0, count($headers), 0);
     foreach ($rows as $row) {
         foreach ($row as $i => $col) {
             $widths[$i] = max($widths[$i], strlen($col));
@@ -388,8 +425,7 @@ function generateOpenApi(array $args = []): void
         preg_match_all('/\{([a-zA-Z0-9_]+)\}/', $route['path'], $matches);
         $pathParamNames = $matches[1];
 
-        $isProtected = in_array($route['group'], ['protected', 'admin'], true)
-            || array_filter($route['through'] ?? [], fn($m) => str_starts_with($m, 'auth'));
+        $isProtected = routeAccess($route)['protected'];
         if ($isProtected) {
             $usesAuth = true;
         }
@@ -667,21 +703,26 @@ function createEndpoint(array $args): void
     $content = <<<PHP
 <?php
 
+use App\Services\Rules;
+use Core\Auth;
 use Core\Endpoint;
+use Core\Response;
 
+// Referencia completa: docs/REFERENCIA_ENDPOINT.md
 Endpoint::from(__FILE__)
     ->at('$httpMethod $routePath')
     ->name('$endpointName')
     ->group('$group')
     ->expects([
-        // 'campo' => 'required|string|min:3',
+        // 'id'     => Rules::id(),
+        // 'email'  => Rules::email(),
+        // 'status' => Rules::status(['draft', 'published']),
+        // 'name'   => 'required|string|min:3',
     ])
     ->handle(function (\$input) {
-        return [
-            'status' => 200,
-            'message' => '$endpointName',
-            'data' => [],
-        ];
+        // Usuario autenticado (grupos con token): Auth::id(\$input), Auth::hasRole(\$input, 'admin')
+        // Otras respuestas: Response::created(\$data), Response::notFound(), Response::error('...', 409)
+        return Response::ok([], '$endpointName');
     });
 PHP;
 
@@ -1626,7 +1667,7 @@ Point Framework CLI
 Comandos:
   init <nombre>                Crear un nuevo proyecto
   serve [puerto]               Iniciar servidor de desarrollo (default: 8080)
-  routes                       Listar rutas registradas y pipelines
+  routes                       Listar rutas: método, grupo, acceso, campos y pipelines
   cache                        Generar manifiesto de rutas (carga lazy)
   cache:clear                  Eliminar manifiesto (volver a carga completa)
   openapi [--serve] [--port=N] Generar openapi.json; --serve lo sirve con Swagger UI (default: 8081)

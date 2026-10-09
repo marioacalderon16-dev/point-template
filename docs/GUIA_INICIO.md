@@ -18,7 +18,8 @@ php point init ../mi-api
 
 Copia el core, `composer.json`/`composer.lock`, Docker (`Dockerfile`, `.dockerignore`), `railway.json`, `public/`, el endpoint
 `/health`, el scheduler, los plugins `health` y `scheduler`, `config/middleware.php` y
-`services/Rules.php`. Genera además un `.env` con un
+`services/Rules.php` y `docs/REFERENCIA_ENDPOINT.md` (todos los métodos de un endpoint en una
+página). Genera además un `.env` con un
 `JWT_SECRET` aleatorio.
 
 ## Paso 2: instalar dependencias
@@ -178,19 +179,19 @@ php point make:endpoint users --public
 
 use Core\DB;
 use Core\Endpoint;
+use Core\Response;
 
 Endpoint::from(__FILE__)
     ->at('GET /users')
     ->name('users')
     ->group('public')
     ->handle(function ($input) {
-        return [
-            'status' => 200,
-            'data' => DB::table('users')
+        return Response::ok(
+            DB::table('users')
                 ->select('id', 'name', 'email', 'bio')
                 ->orderBy('id')
-                ->get(),
-        ];
+                ->get()
+        );
     });
 ```
 
@@ -215,6 +216,7 @@ php point make:endpoint users/create --post --public
 
 use Core\DB;
 use Core\Endpoint;
+use Core\Response;
 
 Endpoint::from(__FILE__)
     ->at('POST /users')
@@ -228,11 +230,12 @@ Endpoint::from(__FILE__)
     ->handle(function ($input) {
         $user = DB::table('users')->insertReturning($input, 'id, name, email, bio');
 
-        return ['status' => 201, 'data' => $user];
+        return Response::created($user);
     });
 ```
 
 `expects` valida el cuerpo antes de `handle`; si falla responde 422 sin tocar la base de datos.
+Con `php point routes` se ven todas las rutas, quién puede llamarlas (`public`, `token`, `roles: …`) y sus campos.
 Convención REST: misma ruta, distinto método (`GET` lista, `POST` crea) y **201** al crear.
 
 ```bash
@@ -393,25 +396,28 @@ php point make:endpoint me
 ```php
 <?php
 
+use Core\Auth;
 use Core\DB;
 use Core\Endpoint;
+use Core\Response;
 
 Endpoint::from(__FILE__)
     ->at('GET /me')
     ->name('me')
     ->group('protected')
     ->handle(function ($input) {
-        return [
-            'status' => 200,
-            'data' => DB::table('users')
+        return Response::ok(
+            DB::table('users')
                 ->select('id', 'name', 'email')
-                ->where('id', $input['_user_id'])
-                ->first(),
-        ];
+                ->where('id', Auth::id($input))
+                ->first()
+        );
     });
 ```
 
-El middleware `auth` verifica el token y deja el claim `sub` en `$input['_user_id']`.
+El middleware `auth` verifica el token; `Auth::id($input)` devuelve el claim `sub`, `Auth::user($input)`
+todos los claims y `Auth::hasRole($input, 'admin')` comprueba roles (`role` o `roles`). Usados en una
+ruta sin token dan un error 500 claro en lugar de `null`.
 
 ```bash
 # sin token → 401 "Token no proporcionado"
@@ -469,6 +475,7 @@ Es `nullable` porque los usuarios existentes no tienen contraseña (no podrán h
 
 use Core\DB;
 use Core\Endpoint;
+use Core\Response;
 
 Endpoint::from(__FILE__)
     ->at('POST /users')
@@ -484,7 +491,7 @@ Endpoint::from(__FILE__)
         $input['password'] = password_hash($input['password'], PASSWORD_DEFAULT);
         $user = DB::table('users')->insertReturning($input, 'id, name, email, bio');
 
-        return ['status' => 201, 'data' => $user];
+        return Response::created($user);
     });
 ```
 
@@ -508,6 +515,7 @@ php point make:endpoint login --post --public
 use Core\Auth;
 use Core\DB;
 use Core\Endpoint;
+use Core\Response;
 
 Endpoint::from(__FILE__)
     ->at('POST /login')
@@ -524,20 +532,17 @@ Endpoint::from(__FILE__)
         if (!$user || !$user['password']) {
             // Igual coste que password_verify: no revela si el email existe
             password_hash($input['password'], PASSWORD_DEFAULT);
-            return ['status' => 401, 'message' => 'Credenciales inválidas'];
+            return Response::error('Credenciales inválidas', 401);
         }
 
         if (!password_verify($input['password'], $user['password'])) {
-            return ['status' => 401, 'message' => 'Credenciales inválidas'];
+            return Response::error('Credenciales inválidas', 401);
         }
 
-        return [
-            'status' => 200,
-            'data' => [
-                'token'      => Auth::issue(['sub' => $user['id']]),
-                'expires_in' => (int) ($_ENV['JWT_TTL'] ?? 3600),
-            ],
-        ];
+        return Response::ok([
+            'token'      => Auth::issue(['sub' => $user['id']]),
+            'expires_in' => (int) ($_ENV['JWT_TTL'] ?? 3600),
+        ]);
     });
 ```
 

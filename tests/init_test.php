@@ -91,6 +91,7 @@ test('parche 20: en un clon del proyecto (como en CI) existen todas las rutas de
 test('parche 25: init copia Rules.php y la config de middleware con public, authenticated y staff', function () {
     withInitProject(function (string $app) {
         expect(file_exists("$app/services/Rules.php"))->toBeTrue();
+        expect(file_exists("$app/docs/REFERENCIA_ENDPOINT.md"))->toBeTrue();
         $groups = (require "$app/config/middleware.php")['groups'];
         foreach (['public', 'protected', 'authenticated', 'admin', 'staff'] as $group) {
             expect(array_key_exists($group, $groups))->toBeTrue();
