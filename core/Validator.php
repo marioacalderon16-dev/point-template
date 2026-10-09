@@ -43,7 +43,8 @@ class Validator
 
     /**
      * Registra una regla propia. $check recibe ($value, ?string $param, array $input) y devuelve
-     * true si el valor es válido. ':field' en el mensaje se sustituye por el nombre del campo.
+     * true si el valor es válido, o un texto con el mensaje de error concreto. ':field' en el
+     * mensaje se sustituye por el nombre del campo.
      */
     public static function extend(string $name, callable $check, string $message = 'El campo :field no es válido.'): void
     {
@@ -515,8 +516,10 @@ class Validator
                     throw new \InvalidArgumentException("Regla de validación desconocida: '{$rule}' en el campo '{$field}'.");
                 }
                 [$check, $message] = self::$custom[$rule];
-                if ($value !== null && $check($value, $param, $this->input) !== true) {
-                    $this->addError($field, str_replace(':field', $field, $message));
+                // true = válido; un texto = error con ese mensaje (p. ej. Rules::transition); otro valor = mensaje por defecto
+                $result = $value !== null ? $check($value, $param, $this->input) : true;
+                if ($result !== true) {
+                    $this->addError($field, str_replace(':field', $field, is_string($result) ? $result : $message));
                 }
                 break;
         }
