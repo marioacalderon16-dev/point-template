@@ -9,6 +9,9 @@ php point routes                             # lista las rutas: grupo, quién pu
 php point make:action CreateUser             # lógica reutilizable en services/Actions/CreateUser.php
 php point make:http                          # requests.http con una petición de ejemplo por ruta
 php point test --smoke                       # llama a todas las rutas GET y falla si alguna da 5xx
+php point call posts.create title=Hola --as=1  # ejecuta un endpoint desde la terminal (validación y permisos reales)
+php point mcp --as=1                         # las rutas con ->mcp() como herramientas para asistentes de IA
+php point logs -f --level=warning            # logs en vivo con colores
 ```
 
 ## Estructura
@@ -57,6 +60,9 @@ Una ruta que no existe responde 404; si existe con otro método, 405 con la cabe
 | `name('a.b')` | Nombre de la ruta, necesario para `connectTo()` | `->name('posts.show')` |
 | `guard(fn)` | Comprobación extra antes de validar. Recibe el input **sin validar** (con `_user`); `false` responde 403 | `->guard(fn ($in) => Auth::hasRole($in, 'admin') \|\| $in['id'] == Auth::id($in))` |
 | `uses(Clase::class)` | Inyecta servicios como argumentos extra de `handle` | `->uses(Mailer::class)->handle(fn ($in, Mailer $m) => ...)` |
+| `idempotent()` | Con la cabecera `Idempotency-Key`, una repetición recibe la misma respuesta sin ejecutar otra vez (pagos, pedidos). Otros datos con la misma clave → 422; en curso → 409 | `->at('POST /orders')->idempotent()` |
+| `asyncable()` / `async()` | Con `Prefer: respond-async` (o siempre, con `async()`), responde 202 y se ejecuta en la cola; el resultado está en `GET /jobs/{id}` | `->asyncable()` |
+| `mcp('descripción')` | Expone la ruta como herramienta para asistentes de IA (`php point mcp`) | `->mcp('Lista pedidos por estado')` |
 | `cache(60)` | Guarda la respuesta GET esos segundos. La clave incluye ruta, campos validados y usuario; solo guarda respuestas 2xx. Cabecera `X-Cache: HIT/MISS` | `->at('GET /stats')->cache(60)` |
 | `transform(fn)` | Modifica la respuesta de `handle` antes de enviarla | `->transform(fn ($res) => $res + ['version' => 1])` |
 | `onError(fn)` | Respuesta propia si algo lanza una excepción | `->onError(fn (Throwable $e) => Response::error('No disponible', 503))` |
@@ -131,6 +137,52 @@ agregador:  ┌► acción A ─┐
             └► acción C ─┘
 ```
 
+## Asíncrono a demanda
+
+```php
+->asyncable()   // el cliente elige: esperar (como siempre) o recibir un ticket
+->async()       // siempre en la cola
+```
+```
+POST /reports/annual  (Prefer: respond-async)  →  202 {"job":"7f3a…","state":"queued","status_url":"/jobs/7f3a…"}
+GET  /jobs/7f3a…                               →  {"state":"running","progress":58}
+GET  /jobs/7f3a…                               →  {"state":"done","result_status":200,"result":{…}}
+```
+- Permisos y validación se comprueban **antes** de encolar: un 401, 403 o 422 llega al momento.
+- `GET /jobs/{id}` solo lo ve quien lanzó el trabajo (con su token). El resultado se guarda 24 h (`->asyncable(keep: 3600)`).
+- Avance desde el handler o la acción: `Core\Job::progress(40)`.
+- Necesita el worker: `php point work`. En desarrollo, con `QUEUE_SYNC=true`, se ejecuta al momento.
+- El handler no debe leer cabeceras ni `$_SERVER`: en el worker no hay petición HTTP (las acciones ya cumplen esto).
+- Junto con `->idempotent()`, un reintento del cliente no crea dos trabajos.
+
+## Desde la terminal y para asistentes de IA
+
+`php point call` ejecuta cualquier endpoint con el pipeline real y sirve para scripts, cron e importaciones:
+
+```bash
+php point call posts.list                                  # por nombre (->name())
+php point call "PUT /posts/7" status=published --as=1      # por método y ruta; --as actúa como el usuario 1
+php point call orders.create items='[5,9]' --as=1 --role=admin --data | jq .id
+echo '{"title":"Hola"}' | php point call posts.create - --as=1
+```
+- `campo=valor`: los valores JSON (`[5,9]`, `true`, `12`) conservan su tipo. Los `{parámetros}` de la ruta salen de los campos (`id=7`).
+- Cuerpo JSON por stdin con `-` (o si llega por una tubería). `--data` imprime solo `data`.
+- Código de salida: 0 (2xx), 1 (4xx) y 2 (5xx), útil con `set -e` en scripts.
+- `--as` solo existe en la CLI: quien ejecuta `point` ya tiene acceso al servidor.
+
+`php point mcp` convierte las rutas marcadas con `->mcp('descripción')` en herramientas para asistentes de IA
+(Model Context Protocol). Los campos y sus reglas salen de `expects`, y los errores de validación guían a la IA:
+
+```bash
+claude mcp add mi-api -- php point mcp --as=1      # Claude Code (desde la carpeta del proyecto)
+```
+```json
+{ "mcpServers": { "mi-api": { "command": "php", "args": ["/ruta/mi-api/point", "mcp", "--as=1"] } } }
+```
+(Claude Desktop, archivo de configuración). La IA actúa como el usuario de `--as`, con sus roles. Las GET se marcan como solo
+lectura y las DELETE como destructivas, y cada llamada queda en el log (`mcp.call`). Expón sobre todo datos
+estructurados: un texto libre escrito por usuarios podría intentar dar órdenes a la IA.
+
 ## Recursos CRUD en un archivo
 
 ```php
@@ -191,6 +243,19 @@ Comparación con otro campo o con un literal: `gt`, `gte`, `lt` y `lte` (número
 Atajos de `App\Services\Rules`: `id()`, `uuid()`, `status(Enum::class | [...])`, `email()`,
 `text(max, min)`, `boolean()`, `date()` y `...pagination()`. Todos admiten `required: false`.
 Las reglas propias se definen en `Rules::custom()`.
+
+**Máquina de estados** con `Rules::transition`. El campo solo admite los cambios permitidos desde el estado
+actual del registro:
+
+```php
+public const STEPS = ['pending' => ['paid', 'cancelled'], 'paid' => ['shipped'], 'shipped' => ['delivered'], 'delivered' => [], 'cancelled' => []];
+
+'status' => Rules::transition('orders', OrderFlow::STEPS)    // opciones: column:, key: (columna del ID), idField: (campo del ID)
+// pending → shipped  →  422 "No se puede pasar de 'pending' a 'shipped'. Permitidos: paid, cancelled."
+```
+`Rules::canTransition($pasos, 'paid', 'shipped')` sirve en jobs y acciones, y `Rules::diagram($pasos)` genera un diagrama
+Mermaid. Si llegan dos cambios a la vez, guarda con `->where('status', $estadoLeido)` y responde 409 si no
+se actualiza ninguna fila.
 
 Una regla que no existe (errata) responde 500 en lugar de dejar el campo sin validar.
 

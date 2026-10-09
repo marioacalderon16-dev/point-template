@@ -99,6 +99,9 @@ despliegue en Railway): [docs/GUIA_INICIO.md](docs/GUIA_INICIO.md).
 | `php point test [filtro]` | Ejecuta los tests |
 | `php point test --smoke` | Llama a todas las rutas GET con datos de ejemplo y falla si alguna da 5xx |
 | `php point make:http` | Genera `requests.http` para probar cada ruta desde VS Code o PhpStorm |
+| `php point call <ruta> [campo=valor] [--as=ID]` | Ejecuta un endpoint desde la terminal (scripts, cron), con validación y permisos |
+| `php point mcp [--as=ID]` | Las rutas con `->mcp()` como herramientas para asistentes de IA (Claude) |
+| `php point logs [-f] [--level=error]` | Logs con colores; `-f` los sigue en vivo |
 | `php point routes` | Lista las rutas: grupo, quién puede entrar (public, token, roles) y campos |
 | `php point openapi --serve` | Documentación OpenAPI con Swagger UI |
 | `php point plugin:list` | Plugins disponibles |

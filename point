@@ -8,6 +8,7 @@ match ($command) {
     'init' => init($argv[2] ?? null),
     'serve' => serve($argv[2] ?? '8080'),
     'routes' => listRoutes(),
+    'logs' => showLogs(array_slice($argv, 2)),
     'call' => callEndpoint(array_slice($argv, 2)),
     'mcp' => mcpServer(array_slice($argv, 2)),
     'cache' => cacheRoutes(),
@@ -1291,6 +1292,105 @@ function mcpServer(array $args): never
     exit(0);
 }
 
+// ────────────────────────────────────────────────
+// LOGS
+// ────────────────────────────────────────────────
+
+/**
+ * php point logs [--level=info] [--grep=texto] [--lines=50] [--date=AAAA-MM-DD] [--follow|-f] [--no-color]
+ * Muestra storage/logs con colores por nivel. --level es el nivel mínimo; --follow sigue el
+ * archivo en vivo (cambia de archivo al pasar la medianoche). Ctrl+C para salir.
+ */
+function showLogs(array $args): void
+{
+    $levels = ['debug' => 0, 'info' => 1, 'warning' => 2, 'error' => 3];
+    $opts = ['level' => 'debug', 'grep' => null, 'lines' => 50, 'date' => null, 'follow' => false, 'color' => stream_isatty(STDOUT)];
+    foreach ($args as $arg) {
+        if ($arg === '--follow' || $arg === '-f') {
+            $opts['follow'] = true;
+        } elseif ($arg === '--no-color') {
+            $opts['color'] = false;
+        } elseif (preg_match('/^--(level|grep|lines|date)=(.+)$/', $arg, $m)) {
+            $opts[$m[1]] = $m[2];
+        } else {
+            echo "Opción desconocida: $arg\n";
+            exit(1);
+        }
+    }
+    $opts['level'] = strtolower((string) $opts['level']);
+    if (!isset($levels[$opts['level']])) {
+        echo "Nivel no válido: {$opts['level']} (debug, info, warning, error)\n";
+        exit(1);
+    }
+    if ($opts['date'] !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $opts['date'])) {
+        echo "Fecha no válida: {$opts['date']} (AAAA-MM-DD)\n";
+        exit(1);
+    }
+
+    $dir = getcwd() . '/storage/logs';
+    $min = $levels[$opts['level']];
+    $colors = ['ERROR' => "\033[31m", 'WARNING' => "\033[33m", 'INFO' => "\033[32m", 'DEBUG' => "\033[90m"];
+
+    $format = function (string $line) use ($levels, $min, $opts, $colors): ?string {
+        if (!preg_match('/^\[([^\]]+)\] ([A-Z]+): (.*)$/', $line, $m)) {
+            return null;
+        }
+        if (($levels[strtolower($m[2])] ?? 0) < $min) {
+            return null;
+        }
+        if ($opts['grep'] !== null && stripos($line, (string) $opts['grep']) === false) {
+            return null;
+        }
+        if (!$opts['color']) {
+            return $line;
+        }
+        $c = $colors[$m[2]] ?? '';
+        return "\033[90m[{$m[1]}]\033[0m {$c}" . str_pad($m[2], 7) . "\033[0m {$m[3]}";
+    };
+
+    $file = fn () => $dir . '/' . ($opts['date'] ?? date('Y-m-d')) . '.log';
+    $current = $file();
+    if (!is_file($current) && !$opts['follow']) {
+        echo "No hay log en " . basename($current) . " (storage/logs).\n";
+        return;
+    }
+
+    $lines = is_file($current) ? (file($current, FILE_IGNORE_NEW_LINES) ?: []) : [];
+    $shown = array_values(array_filter(array_map($format, $lines), fn ($l) => $l !== null));
+    foreach (array_slice($shown, -max(1, (int) $opts['lines'])) as $l) {
+        echo $l, "\n";
+    }
+    if (!$opts['follow']) {
+        return;
+    }
+
+    $offset = is_file($current) ? (int) filesize($current) : 0;
+    while (true) { // @phpstan-ignore while.alwaysTrue
+        usleep(500000);
+        if ($opts['date'] === null && $file() !== $current) {
+            $current = $file(); // medianoche: archivo nuevo
+            $offset = 0;
+        }
+        clearstatcache(true, $current);
+        $size = is_file($current) ? (int) filesize($current) : 0;
+        if ($size < $offset) {
+            $offset = 0; // truncado o rotado
+        }
+        if ($size > $offset) {
+            $h = fopen($current, 'r');
+            fseek($h, $offset);
+            while (($line = fgets($h)) !== false) {
+                $out = $format(rtrim($line, "\n"));
+                if ($out !== null) {
+                    echo $out, "\n";
+                }
+            }
+            $offset = (int) ftell($h);
+            fclose($h);
+        }
+    }
+}
+
 /**
  * Prueba de humo: llama a todas las rutas con datos de ejemplo (sampleRequest) y falla si alguna
  * responde 5xx. Por defecto solo GET; --smoke=all incluye POST/PUT/PATCH/DELETE, que ESCRIBEN en
@@ -2167,6 +2267,7 @@ Comandos:
   serve [puerto]               Iniciar servidor de desarrollo (default: 8080)
   call <nombre|"MÉTODO /ruta"> [campo=valor] [--as=ID] [--role=r] [--data]  Ejecutar un endpoint desde la terminal (0 2xx, 1 4xx, 2 5xx)
   mcp [--as=ID] [--role=r]     Servidor MCP: las rutas con ->mcp() como herramientas para asistentes de IA
+  logs [--level=error] [--grep=texto] [--lines=N] [--date=AAAA-MM-DD] [-f]  Ver los logs con colores; -f los sigue en vivo
   routes                       Listar rutas: método, grupo, acceso, campos y pipelines
   cache                        Generar manifiesto de rutas (carga lazy)
   cache:clear                  Eliminar manifiesto (volver a carga completa)

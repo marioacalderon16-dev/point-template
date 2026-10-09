@@ -634,6 +634,30 @@ php point test
 git add . && git commit -m "Login con contraseña: columna password, hash en registro, POST /login y tests"
 ```
 
+## Herramientas del día a día
+
+**Documentación interactiva (Swagger).** `php point openapi` genera `openapi.json` a partir de las rutas y sus
+reglas, y `php point openapi --serve` lo abre con Swagger UI en `http://localhost:8081`. Desde ahí se ven
+todos los endpoints con sus campos y se pueden probar con el botón «Try it out». Para las rutas protegidas,
+pulsa «Authorize» y pega un token (por ejemplo, el de `POST /login`).
+
+**Logs.** `php point logs` muestra los últimos registros de `storage/logs` con colores por nivel:
+
+```bash
+php point logs --lines=100            # últimas 100 líneas de hoy
+php point logs --level=error          # solo errores
+php point logs --grep=login -f        # sigue en vivo las líneas que contienen "login" (Ctrl+C para salir)
+php point logs --date=2026-10-01      # otro día
+```
+
+**Endpoints desde la terminal.** `php point call users.create name=Ana email=ana@example.com password=secreto123`
+ejecuta el endpoint con su validación y permisos (`--as=1` para actuar como un usuario). Ver
+[REFERENCIA_ENDPOINT.md](REFERENCIA_ENDPOINT.md#desde-la-terminal-y-para-asistentes-de-ia).
+
+**Trabajos en segundo plano.** Las rutas con `->asyncable()` o `->async()` y los jobs necesitan el worker:
+`php point work`. En desarrollo basta con `QUEUE_SYNC=true` en `.env`; en producción, el worker va como un
+proceso aparte (en Railway, un segundo servicio con el mismo repositorio y el comando `php point work`).
+
 ## Paso 14: despliegue en Railway
 
 La plantilla trae `Dockerfile` (Apache + PHP 8.5 + pdo_pgsql, `APP_ENV=production`),
