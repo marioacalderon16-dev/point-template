@@ -11,7 +11,9 @@ jobs:
       matrix:
         php-version: ['8.4', '8.5']
 
-    # Postgres desechable por ejecución: los tests nunca tocan la base de desarrollo ni la de producción
+    # Base desechable por ejecución: los tests nunca tocan la base de desarrollo ni la de producción.
+    # Proyecto con MySQL: sustituye el servicio por el bloque comentado de abajo y el env por
+    # DB_DSN: mysql:host=127.0.0.1;port=3306;dbname=app_test;charset=utf8mb4 (DB_USER/DB_PASS: app)
     services:
       postgres:
         image: postgres:18
@@ -25,6 +27,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # mysql:
+      #   image: mysql:8.4
+      #   env:
+      #     MYSQL_DATABASE: app_test
+      #     MYSQL_USER: app
+      #     MYSQL_PASSWORD: app
+      #     MYSQL_ROOT_PASSWORD: root
+      #   ports: ['3306:3306']
+      #   options: >-
+      #     --health-cmd "mysqladmin ping -h 127.0.0.1"
+      #     --health-interval 5s
+      #     --health-timeout 5s
+      #     --health-retries 10
 
     # Las variables del proceso tienen prioridad sobre .env (que en CI no existe)
     env:
@@ -38,7 +53,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          extensions: pdo_sqlite, pdo_pgsql, pcntl
+          extensions: pdo_sqlite, pdo_pgsql, pdo_mysql, pcntl
 
       - run: composer install --no-interaction --prefer-dist
 

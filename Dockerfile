@@ -4,12 +4,12 @@ WORKDIR /app
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
 
-# Imagen final: Apache + PHP 8.5 con PostgreSQL
+# Imagen final: Apache + PHP 8.5 con PostgreSQL y MySQL
 FROM php:8.5-apache
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libpq-dev \
- && docker-php-ext-install pdo_pgsql pcntl \
+ && docker-php-ext-install pdo_pgsql pdo_mysql pcntl \
  && rm -rf /var/lib/apt/lists/* \
  && (a2dismod -f mpm_event mpm_worker || true) \
  && a2enmod mpm_prefork rewrite headers \

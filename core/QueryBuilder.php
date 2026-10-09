@@ -54,8 +54,10 @@ final class QueryBuilder
 
         $tz = $_ENV['TIME_ZONE'] ?? 'UTC';
 
-        if (str_starts_with($dsn, 'mysql:')) {
-            $defaultOptions[PDO::MYSQL_ATTR_INIT_COMMAND] = "SET time_zone = '" . addslashes($tz) . "'";
+        // Pdo\Mysql::ATTR_INIT_COMMAND: PDO::MYSQL_ATTR_* emite E_DEPRECATED en PHP 8.5, y el
+        // ErrorHandler convierte cualquier aviso en un 500 (todo acceso a MySQL fallaba)
+        if (str_starts_with($dsn, 'mysql:') && class_exists(\Pdo\Mysql::class)) {
+            $defaultOptions[\Pdo\Mysql::ATTR_INIT_COMMAND] = "SET time_zone = '" . addslashes($tz) . "'";
         }
 
         return new PDO($dsn, $user, $pass, array_replace($defaultOptions, $options));

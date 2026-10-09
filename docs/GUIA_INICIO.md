@@ -606,6 +606,52 @@ curl -s -i $URL/health | head -20                          # cabeceras de seguri
 
 En producción los errores 500 no muestran archivo, línea ni traza (en `development` sí).
 
+## Sin Railway, Supabase ni Neon
+
+Ninguno es obligatorio: Point necesita una base de datos Postgres o MySQL y un sitio donde ejecutar
+PHP 8.4+.
+
+### Base de datos
+
+Cualquier Postgres o MySQL/MariaDB sirve (local, servidor propio, AWS RDS, DigitalOcean…): solo
+cambian `DB_DSN`, `DB_USER` y `DB_PASS`. SQLite no está soportado.
+
+```
+DB_DSN="pgsql:host=mi-servidor;port=5432;dbname=mi_api"
+DB_DSN="mysql:host=mi-servidor;port=3306;dbname=mi_api;charset=utf8mb4"
+```
+
+**CI con MySQL:** en `.github/workflows/ci.yml`, sustituye el servicio `postgres` por el bloque
+`mysql` comentado y cambia `DB_DSN` como indica el comentario del archivo, para que los tests se
+ejecuten contra el mismo motor que usas.
+
+### Hosting con Docker (Render, Fly.io, un VPS, Coolify…)
+
+El `Dockerfile` funciona en cualquier plataforma (trae `pdo_pgsql` y `pdo_mysql`); `railway.json`
+se ignora fuera de Railway. Lo que Railway hacía solo, hazlo en la plataforma:
+
+- **Variables de entorno**: en su panel (las mismas del paso 14.3). El contenedor escucha en
+  `$PORT` (8080 por defecto).
+- **Migraciones**: ejecuta `php scribe migrate` en cada despliegue (con el comando de
+  «release/pre-deploy» de la plataforma, si lo tiene, o a mano).
+- **Health check**: apunta a `/health`.
+
+### Hosting PHP tradicional (Apache o Nginx + PHP 8.4)
+
+1. Sube el proyecto y ejecuta `composer install --no-dev --optimize-autoloader`.
+2. La **raíz web** debe ser la carpeta `public/` (trae su `.htaccess` para Apache), nunca la raíz
+   del proyecto: así `.env`, `core/` y `vendor/` no quedan accesibles desde internet.
+3. Crea el `.env` en el servidor con `APP_ENV=production` y tus credenciales.
+4. Ejecuta `php point migrate` en cada despliegue.
+5. Si usas tareas programadas, añade un cron que ejecute el scheduler cada minuto:
+
+```
+* * * * * cd /ruta/a/mi-api && php scheduler run >> /dev/null 2>&1
+```
+
+6. Si usas jobs con `QUEUE_SYNC=false`, deja `php point work` corriendo como servicio
+   (systemd, supervisor…).
+
 ---
 
 **Flujo de trabajo:** desarrollas en local (`php point serve 8090`, `php point test`), haces commit
