@@ -41,15 +41,16 @@ Orden en que se ejecuta una petición:
 7. Se envía la respuesta.
 
 Una excepción en los pasos 4 a 6 la recoge `onError()` si está definido; si no, responde 500.
+Una ruta que no existe responde 404; si existe con otro método, 405 con la cabecera `Allow`.
 
 ## Métodos
 
 | Método | Para qué | Ejemplo |
 |---|---|---|
-| `at('MÉTODO /ruta')` | Método HTTP y ruta. `{x}` es un parámetro de ruta. Varios métodos con `\|` | `->at('GET /posts/{id}')`, `->at('PUT\|PATCH /posts/{id}')` |
+| `at('MÉTODO /ruta')` | Método HTTP y ruta. `{x}` es un parámetro de ruta. Varios métodos con `\|`. Un formato inválido lanza excepción al cargar | `->at('GET /posts/{id}')`, `->at('PUT\|PATCH /posts/{id}')` |
 | `group('nombre')` | Grupo de middlewares de `config/middleware.php`. Un grupo no declarado responde 500 | `->group('public')`, `->group('admin')` |
 | `through(...)` | Middlewares extra solo para esta ruta, con parámetros tras `:` | `->through('rate_limit:5')`, `->through('auth:billing')` |
-| `expects([...])` | Reglas por campo. Solo los campos declarados llegan a `handle` | `'email' => Rules::email()` |
+| `expects([...])` | Reglas por campo. Solo los campos declarados llegan a `handle`. Varias llamadas se acumulan | `'email' => Rules::email()` |
 | `name('a.b')` | Nombre de la ruta, necesario para `connectTo()` | `->name('posts.show')` |
 | `guard(fn)` | Comprobación extra antes de validar. Recibe el input **sin validar** (con `_user`); `false` responde 403 | `->guard(fn ($in) => Auth::hasRole($in, 'admin') \|\| $in['id'] == Auth::id($in))` |
 | `uses(Clase::class)` | Inyecta servicios como argumentos extra de `handle` | `->uses(Mailer::class)->handle(fn ($in, Mailer $m) => ...)` |

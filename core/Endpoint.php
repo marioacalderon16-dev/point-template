@@ -6,19 +6,21 @@ use Core\Middleware\MiddlewareManager;
 
 class Endpoint
 {
-    private $file;
-    private $methods = [];
-    private $path;
-    private $group;
-    private $expects = [];
-    private $through = [];
-    private $callback;
-    private $connectsTo = [];
-    private $name;
-    private $transform;
-    private $guards = [];
-    private $onError;
-    private $uses = [];
+    private const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+
+    private string $file = '';
+    private array $methods = [];
+    private ?string $path = null;
+    private ?string $group = null;
+    private array $expects = [];
+    private array $through = [];
+    private mixed $callback = null;
+    private array $connectsTo = [];
+    private ?string $name = null;
+    private mixed $transform = null;
+    private array $guards = [];
+    private mixed $onError = null;
+    private array $uses = [];
 
     private function __construct() {}
 
@@ -31,9 +33,18 @@ class Endpoint
 
     public function at(string $route): self
     {
-        [$methodsStr, $path] = explode(' ', $route, 2);
-        $this->methods = array_map('strtoupper', explode('|', $methodsStr));
-        $this->path = $path;
+        // 'GET /ruta' o 'PUT|PATCH /ruta'; tolera espacios de más y falla claro con cualquier otra cosa
+        $parts = preg_split('/\s+/', trim($route), 2);
+        if (count($parts) !== 2 || !str_starts_with($parts[1], '/')) {
+            throw new \InvalidArgumentException("Endpoint::at('{$route}'): formato inválido, se espera 'MÉTODO /ruta' (p. ej. 'GET /users').");
+        }
+        $methods = array_map('strtoupper', explode('|', $parts[0]));
+        $invalid = array_diff($methods, self::HTTP_METHODS);
+        if ($invalid !== []) {
+            throw new \InvalidArgumentException("Endpoint::at('{$route}'): método HTTP no válido: " . implode(', ', $invalid) . '.');
+        }
+        $this->methods = $methods;
+        $this->path = $parts[1];
         return $this;
     }
 
@@ -49,9 +60,10 @@ class Endpoint
         return $this;
     }
 
+    /** Se acumula como through()/guard(): varias llamadas suman reglas (la última gana por campo). */
     public function expects(array $rules): self
     {
-        $this->expects = $rules;
+        $this->expects = array_merge($this->expects, $rules);
         return $this;
     }
 
@@ -138,6 +150,13 @@ class Endpoint
         $route = RouteRegistry::getInstance()->findByPathAndMethod($requestUri, $requestMethod);
 
         if (!$route) {
+            // La ruta existe con otros métodos: 405 + Allow (RFC 9110), no 404
+            $allowed = RouteRegistry::getInstance()->allowedMethods($requestUri);
+            if ($allowed !== []) {
+                header('Allow: ' . implode(', ', $allowed));
+                self::sendJson(['status' => 405, 'message' => 'Método no permitido'], 405);
+                return;
+            }
             self::sendJson(['error' => 'Ruta no encontrada'], 404);
             return;
         }
@@ -207,9 +226,8 @@ class Endpoint
         }
 
         if (!empty($route['expects'])) {
-            $allowedKeys = array_keys($route['expects']);
-            $inputRaw = array_intersect_key($inputRaw, array_flip($allowedKeys));
-            $inputSources = array_intersect_key($inputSources, array_flip($allowedKeys));
+            $inputRaw = array_intersect_key($inputRaw, $route['expects']);
+            $inputSources = array_intersect_key($inputSources, $route['expects']);
         }
 
         if (!empty($route['expects'])) {
@@ -231,7 +249,8 @@ class Endpoint
             $handler = self::resolveHandler($route['callback']);
 
             if (!is_callable($handler)) {
-                throw new \RuntimeException('Handler no es invocable: ' . json_encode($route['callback']));
+                $desc = $route['callback'] instanceof \Closure ? 'Closure' : json_encode($route['callback']);
+                throw new \RuntimeException("Handler no es invocable: {$desc} (" . ($route['file'] ?? '?') . ')');
             }
 
             $args = [$validatedData];
@@ -253,7 +272,12 @@ class Endpoint
         } catch (\Throwable $e) {
             if (!empty($route['onError'])) {
                 $response = call_user_func($route['onError'], $e);
-                self::sendJson($response, is_array($response) ? ($response['status'] ?? 500) : 500);
+                if (!is_array($response)) {
+                    // Un texto se envía como mensaje, no como cadena JSON suelta
+                    $response = ['status' => 500, 'message' => is_scalar($response) ? (string) $response : 'Error'];
+                }
+                $status = $response['status'] ?? 500;
+                self::sendJson($response, is_int($status) && $status >= 100 && $status <= 599 ? $status : 500);
                 return;
             }
             self::handleExecutionError($e);
@@ -313,7 +337,9 @@ class Endpoint
     {
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        // Sangría solo en development: en producción son bytes de más en cada respuesta
+        $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | (ErrorHandler::isDevelopment() ? JSON_PRETTY_PRINT : 0);
+        echo json_encode($data, $flags);
         exit;
     }
 

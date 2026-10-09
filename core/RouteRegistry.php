@@ -144,6 +144,23 @@ class RouteRegistry
         return md5(implode('|', $items));
     }
 
+    /** Métodos con los que existe la ruta (para responder 405 con Allow); [] si no existe. */
+    public function allowedMethods(string $path): array
+    {
+        $methods = [];
+        foreach ($this->routes as $route) {
+            if ($this->pathMatches($route['path'], $path)) {
+                $methods = array_merge($methods, $route['methods']);
+            }
+        }
+        foreach ($this->manifest['routes'] ?? [] as $entry) {
+            if ($this->pathMatches($entry['path'], $path)) {
+                $methods = array_merge($methods, $entry['methods']);
+            }
+        }
+        return array_values(array_unique($methods));
+    }
+
     private function match(string $path, string $method): ?array
     {
         foreach ($this->routes as $route) {
