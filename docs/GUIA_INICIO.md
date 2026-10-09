@@ -366,6 +366,14 @@ Aserciones disponibles: `toBe`, `toEqual`, `toBeTrue`, `toBeFalse`, `toBeNull`, 
 `toContain`, `toHaveKey`, `toHaveCount`, `toBeGreaterThan`, `toBeLessThan`, `toMatch`,
 `toBeInstanceOf`, `toThrow`, y `->not()` para negar.
 
+
+### Prueba de humo
+
+`php point test --smoke` llama a todas las rutas GET con datos de ejemplo y falla si alguna responde
+5xx: detecta endpoints rotos sin escribir tests. Las rutas protegidas reciben un token con el rol
+que piden. `--smoke=all` incluye también POST/PUT/PATCH/DELETE, que **escriben** en la base: úsalo
+con `.env.testing` apuntando a una base solo para tests.
+
 ## Paso 11: endpoint protegido con JWT `GET /me`
 
 Grupos de `config/middleware.php`: `public` (sin middlewares), `protected` (exige token; es el
@@ -489,6 +497,17 @@ use Core\DB;
 
 final class CreateUser
 {
+    /** Datos que acepta: los usa el endpoint (expects) y cualquier otro llamador (Validator). */
+    public static function rules(): array
+    {
+        return [
+            'name'     => 'required|string|trim|min:2|max:255',
+            'email'    => 'required|email|lowercase|unique:users,email',
+            'password' => 'required|string|min:8|max:72',
+            'bio'      => 'optional|string|max:500',
+        ];
+    }
+
     public function __invoke(array $data): array
     {
         $data['password'] = password_hash($data['password'], PASSWORD_DEFAULT);
@@ -510,16 +529,14 @@ Endpoint::from(__FILE__)
     ->at('POST /users')
     ->name('users.create')
     ->group('public')
-    ->expects([
-        'name'     => 'required|string|trim|min:2|max:255',
-        'email'    => 'required|email|lowercase|unique:users,email',
-        'password' => 'required|string|min:8|max:72',
-        'bio'      => 'optional|string|max:500',
-    ])
+    ->expects(CreateUser::rules())
     ->handle(fn ($input) => Response::created((new CreateUser)($input)));
 ```
 
-- **Todo campo que se guarde debe estar en `expects`**: los no declarados se descartan en
+Fuera de HTTP (un job, una importación CSV) se validan los datos con las mismas reglas:
+`$v = new Core\Validator($fila, CreateUser::rules()); if ($v->passes()) (new CreateUser)($v->validated());`
+
+- **Todo campo que se guarde debe estar en `rules()`** (llega a `expects`): los no declarados se descartan en
   silencio (sin `password` en `expects`, el usuario se crea con `password` NULL).
 - **La línea `password_hash` de la acción es obligatoria**: sin ella la contraseña queda en texto plano y el
   login siempre responde 401. En la tabla, un hash válido empieza por `$2y$` y mide 60 caracteres.

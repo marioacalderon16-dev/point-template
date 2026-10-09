@@ -21,6 +21,7 @@ class Endpoint
     private array $guards = [];
     private mixed $onError = null;
     private array $uses = [];
+    private ?int $cache = null;
 
     private function __construct() {}
 
@@ -64,6 +65,20 @@ class Endpoint
     public function expects(array $rules): self
     {
         $this->expects = array_merge($this->expects, $rules);
+        return $this;
+    }
+
+    /**
+     * Guarda la respuesta de las peticiones GET durante $seconds segundos. La clave incluye la ruta,
+     * los datos validados (query y parámetros) y el usuario autenticado: nunca mezcla usuarios.
+     * Solo se guardan respuestas 2xx; las de error se recalculan siempre.
+     */
+    public function cache(int $seconds): self
+    {
+        if ($seconds < 1) {
+            throw new \InvalidArgumentException('Endpoint::cache(): los segundos deben ser 1 o más.');
+        }
+        $this->cache = $seconds;
         return $this;
     }
 
@@ -138,6 +153,7 @@ class Endpoint
             'guards' => $this->guards,
             'onError' => $this->onError,
             'uses' => $this->uses,
+            'cache' => $this->cache,
         ]);
         return $this;
     }
@@ -253,6 +269,16 @@ class Endpoint
                 throw new \RuntimeException("Handler no es invocable: {$desc} (" . ($route['file'] ?? '?') . ')');
             }
 
+            $cacheKey = self::cacheKey($route, $requestMethod, $requestUri, $validatedData);
+            if ($cacheKey !== null) {
+                $cached = Cache::get($cacheKey);
+                if ($cached !== null) {
+                    header('X-Cache: HIT');
+                    self::sendResponse($cached);
+                    return;
+                }
+            }
+
             $args = [$validatedData];
             foreach ($route['uses'] ?? [] as $serviceClass) {
                 $args[] = Container::resolve($serviceClass);
@@ -266,6 +292,13 @@ class Endpoint
 
             if (!empty($route['transform'])) {
                 $response = call_user_func($route['transform'], $response);
+            }
+
+            if ($cacheKey !== null && self::isSuccessful($response)) {
+                // Ida y vuelta por JSON: la caché no guarda objetos y la respuesta sale igual
+                $response = is_string($response) ? $response : json_decode((string) json_encode($response), true);
+                Cache::set($cacheKey, $response, $route['cache']);
+                header('X-Cache: MISS');
             }
 
             self::sendResponse($response);
@@ -306,6 +339,25 @@ class Endpoint
     public static function addGlobalMiddleware(string $name): void
     {
         MiddlewareManager::global($name);
+    }
+
+    private static function cacheKey(array $route, string $method, string $uri, array $data): ?string
+    {
+        if (empty($route['cache']) || !in_array($method, ['GET', 'HEAD'], true)) {
+            return null;
+        }
+        unset($data['_user']); // sus claims (iat, exp) cambian con cada token; basta _user_id
+        ksort($data);
+        return 'endpoint:' . sha1($method . ' ' . $uri . ' ' . json_encode($data));
+    }
+
+    private static function isSuccessful(mixed $response): bool
+    {
+        if (is_string($response)) {
+            return true;
+        }
+        $status = is_array($response) ? ($response['status'] ?? 200) : 200;
+        return is_int($status) && $status >= 200 && $status < 300;
     }
 
     /**

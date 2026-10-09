@@ -20,7 +20,7 @@ final class Cache
             if ($entry !== null && ($entry['expires_at'] === 0 || $entry['expires_at'] > time())) {
                 return $entry['value'];
             }
-            unlink($file);
+            @unlink($file); // otra petición puede haberlo borrado ya
         }
 
         if ($fallback !== null) {

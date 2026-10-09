@@ -21,6 +21,7 @@ test('make:action crea services/Actions/<Nombre>.php invocable y sin HTTP', func
         require_once $file;
         $action = new App\Services\Actions\CreateUser();
         expect($action(['name' => 'Ana']))->toBe(['name' => 'Ana']);
+        expect(App\Services\Actions\CreateUser::rules())->toBe([]);
 
         [, $again] = pointIn($dir, 'make:action CreateUser');
         expect($again)->toBe(1);

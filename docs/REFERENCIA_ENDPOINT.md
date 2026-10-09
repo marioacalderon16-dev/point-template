@@ -8,6 +8,7 @@ php point make:endpoint posts/update --put   # crea endpoints/posts/update.php c
 php point routes                             # lista las rutas: grupo, quién puede entrar y campos
 php point make:action CreateUser             # lógica reutilizable en services/Actions/CreateUser.php
 php point make:http                          # requests.http con una petición de ejemplo por ruta
+php point test --smoke                       # llama a todas las rutas GET y falla si alguna da 5xx
 ```
 
 ## Estructura
@@ -56,6 +57,7 @@ Una ruta que no existe responde 404; si existe con otro método, 405 con la cabe
 | `name('a.b')` | Nombre de la ruta, necesario para `connectTo()` | `->name('posts.show')` |
 | `guard(fn)` | Comprobación extra antes de validar. Recibe el input **sin validar** (con `_user`); `false` responde 403 | `->guard(fn ($in) => Auth::hasRole($in, 'admin') \|\| $in['id'] == Auth::id($in))` |
 | `uses(Clase::class)` | Inyecta servicios como argumentos extra de `handle` | `->uses(Mailer::class)->handle(fn ($in, Mailer $m) => ...)` |
+| `cache(60)` | Guarda la respuesta GET esos segundos. La clave incluye ruta, campos validados y usuario; solo guarda respuestas 2xx. Cabecera `X-Cache: HIT/MISS` | `->at('GET /stats')->cache(60)` |
 | `transform(fn)` | Modifica la respuesta de `handle` antes de enviarla | `->transform(fn ($res) => $res + ['version' => 1])` |
 | `onError(fn)` | Respuesta propia si algo lanza una excepción | `->onError(fn (Throwable $e) => Response::error('No disponible', 503))` |
 | `connectTo('nombre')` | Encadena otro endpoint por nombre: la respuesta de este es el input del siguiente | `->connectTo('posts.notify')` |
@@ -85,6 +87,14 @@ desde cualquier sitio:
 
 // job, seed, otro endpoint o test
 (new CreateUser)(['name' => 'Ana', 'email' => 'ana@example.com', 'password' => 'secreto123']);
+```
+
+La acción declara sus datos en `rules()`, así se validan igual desde el endpoint y desde fuera de HTTP:
+
+```php
+->expects(CreateUser::rules())                                   // endpoint
+$v = new Core\Validator($fila, CreateUser::rules());             // job o importación
+if ($v->passes()) (new CreateUser)($v->validated());
 ```
 
 Regla: la acción **no sabe nada de HTTP**. No usa `Response::` (devuelve datos), no lee `$_GET` ni

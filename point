@@ -821,17 +821,29 @@ function createAction(?string $name): void
 declare(strict_types=1);
 namespace App\Services\Actions;
 
+use App\Services\Rules;
+
 /**
  * Una operación del negocio, reutilizable desde endpoints, jobs, seeds o tests.
  * No sabe nada de HTTP: recibe datos y devuelve datos (sin Response:: ni \$_GET ni \$input['_user']).
  *
- * Uso en un endpoint:
- *   ->handle(fn (\$in) => Response::ok((new $className)(\$in)))
- * Uso en cualquier otro sitio:
- *   (new $className)(['campo' => 'valor']);
+ * En un endpoint (valida con rules() y ejecuta):
+ *   ->expects($className::rules())->handle(fn (\$in) => Response::ok((new $className)(\$in)))
+ * Fuera de HTTP (job, importación...), validando con las mismas reglas:
+ *   \$v = new \Core\Validator(\$datos, $className::rules());
+ *   if (\$v->passes()) (new $className)(\$v->validated());
  */
 final class $className
 {
+    /** Datos que acepta la operación (mismas reglas que en expects). */
+    public static function rules(): array
+    {
+        return [
+            // 'email' => Rules::email(),
+            // 'name'  => Rules::text(max: 100),
+        ];
+    }
+
     public function __invoke(array \$data): array
     {
         // Lógica de la operación (p. ej. DB::table('...')->insertReturning(\$data, 'id'))
@@ -864,6 +876,32 @@ function sampleValue(string $field, array $rules): mixed
     };
 }
 
+/**
+ * Petición de ejemplo para una ruta: parámetros de ruta a 1 y campos de expects con valores de
+ * ejemplo según sus reglas (sin archivos). La usan make:http y test --smoke.
+ * @return array{path: string, fields: array, hasBody: bool}
+ */
+function sampleRequest(array $route, string $method): array
+{
+    preg_match_all('/\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}/', $route['path'], $m);
+    $fields = [];
+    foreach ($route['expects'] ?? [] as $field => $ruleString) {
+        if (in_array($field, $m[1], true)) {
+            continue;
+        }
+        $rules = is_array($ruleString) ? array_values($ruleString) : explode('|', $ruleString);
+        if (in_array('file', $rules, true)) {
+            continue; // los archivos no se pueden enviar en JSON
+        }
+        $fields[$field] = sampleValue($field, $rules);
+    }
+    return [
+        'path' => (string) preg_replace('/\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}/', '1', $route['path']),
+        'fields' => $fields,
+        'hasBody' => in_array($method, ['POST', 'PUT', 'PATCH'], true),
+    ];
+}
+
 function makeHttp(array $args): void
 {
     requireProject();
@@ -889,25 +927,10 @@ function makeHttp(array $args): void
         . "@baseUrl = http://localhost:$port\n@token = PEGA_AQUI_UN_TOKEN\n";
 
     foreach ($routes as $route) {
-        preg_match_all('/\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}/', $route['path'], $m);
-        $pathParams = $m[1];
         $access = routeAccess($route);
 
         foreach ($route['methods'] as $method) {
-            $path = preg_replace('/\{([a-zA-Z0-9_]+)(?::[a-zA-Z]+)?\}/', '1', $route['path']);
-            $fields = [];
-            foreach ($route['expects'] ?? [] as $field => $ruleString) {
-                if (in_array($field, $pathParams, true)) {
-                    continue;
-                }
-                $rules = is_array($ruleString) ? array_values($ruleString) : explode('|', $ruleString);
-                if (array_filter($rules, fn ($r) => $r === 'file')) {
-                    continue; // los archivos no se pueden enviar en JSON
-                }
-                $fields[$field] = sampleValue($field, $rules);
-            }
-
-            $hasBody = in_array($method, ['POST', 'PUT', 'PATCH'], true);
+            ['path' => $path, 'fields' => $fields, 'hasBody' => $hasBody] = sampleRequest($route, $method);
             if (!$hasBody && $fields) {
                 $path .= '?' . http_build_query(array_map(fn ($v) => is_bool($v) ? ($v ? 'true' : 'false') : $v, $fields));
             }
@@ -999,6 +1022,51 @@ PHP;
 // TEST
 // ────────────────────────────────────────────────
 
+/**
+ * Prueba de humo: llama a todas las rutas con datos de ejemplo (sampleRequest) y falla si alguna
+ * responde 5xx. Por defecto solo GET; --smoke=all incluye POST/PUT/PATCH/DELETE, que ESCRIBEN en
+ * la base (usar con .env.testing). Las rutas protegidas reciben un token con el rol que piden.
+ */
+function runSmoke(bool $all): never
+{
+    define('POINT_NO_MANIFEST', true);
+    require_once 'bootstrap.php';
+
+    $routes = \Core\RouteRegistry::getInstance()->getRoutes();
+    usort($routes, fn ($a, $b) => strcmp($a['path'], $b['path']));
+
+    $rows = [];
+    $failed = 0;
+    $skipped = 0;
+    foreach ($routes as $route) {
+        $access = routeAccess($route);
+        foreach ($route['methods'] as $method) {
+            if (!$all && $method !== 'GET') {
+                $skipped++;
+                continue;
+            }
+            ['path' => $path, 'fields' => $fields] = sampleRequest($route, $method);
+            $headers = [];
+            if ($access['protected']) {
+                $role = str_starts_with($access['label'], 'roles: ') ? explode(',', substr($access['label'], 7))[0] : null;
+                $headers['Authorization'] = 'Bearer ' . \Core\Auth::issue(array_filter(['sub' => 1, 'role' => $role]));
+            }
+            $status = http($method, $path, $fields, $headers)->status;
+            $ok = $status < 500;
+            $failed += $ok ? 0 : 1;
+            $rows[] = sprintf("  %s  %-7s %-40s %d", $ok ? "\033[32mOK\033[0m  " : "\033[31mFAIL\033[0m", $method, $route['path'], $status);
+        }
+    }
+
+    echo "\n  Prueba de humo (" . ($all ? 'todos los métodos' : 'solo GET; --smoke=all incluye escrituras') . ")\n\n";
+    echo implode("\n", $rows) . "\n\n";
+    printf("  %d rutas probadas, %s%s\n", count($rows),
+        $failed ? "\033[31m$failed con error 5xx\033[0m" : "\033[32msin errores 5xx\033[0m",
+        $skipped ? ", $skipped de escritura omitidas" : '');
+    \Core\TestRunner::stopServer();
+    exit($failed ? 1 : 0);
+}
+
 function runTests(?string $filter = null): void
 {
     if (!file_exists('vendor/autoload.php')) {
@@ -1016,8 +1084,12 @@ function runTests(?string $filter = null): void
         exit(1);
     }
 
+    // --smoke prueba las rutas reales de la app: sin las rutas de fixtures de tests/
+    $smoke = str_starts_with((string) $filter, '--smoke');
     // El servidor de test hereda esta variable y carga tests/fixtures/endpoints
-    putenv('POINT_TESTING=1');
+    if (!$smoke) {
+        putenv('POINT_TESTING=1');
+    }
     // Contadores de rate limit aislados por ejecución (no arrastra intentos de corridas previas)
     putenv('RATE_LIMIT_DIR=' . sys_get_temp_dir() . '/point-ratelimit-' . getmypid());
 
@@ -1059,6 +1131,10 @@ function runTests(?string $filter = null): void
         }
     } elseif (!$dsnFromProcess && ($_ENV['DB_DSN'] ?? '') !== '') {
         echo "Aviso: los tests usan la base de .env (desarrollo). Crea .env.testing con DB_DSN de una base solo para tests.\n";
+    }
+
+    if ($smoke) {
+        runSmoke($filter === '--smoke=all');
     }
 
     $files = \Core\TestRunner::discover($testsDir);
@@ -1824,7 +1900,7 @@ Comandos:
   cache                        Generar manifiesto de rutas (carga lazy)
   cache:clear                  Eliminar manifiesto (volver a carga completa)
   openapi [--serve] [--port=N] Generar openapi.json; --serve lo sirve con Swagger UI (default: 8081)
-  test [filtro]                Ejecutar tests (filtra por nombre o archivo)
+  test [filtro|--smoke[=all]]  Ejecutar tests; --smoke llama a todas las rutas GET (=all: también escrituras) y falla con 5xx
   work [--once]                Iniciar worker de jobs (--once: procesar uno y salir)
        [--max-jobs=N] [--max-time=S]  Salir tras N jobs o S segundos
   work:failed                  Listar jobs fallidos
