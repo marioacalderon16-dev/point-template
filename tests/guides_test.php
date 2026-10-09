@@ -122,6 +122,27 @@ function guideUpload(int $port, string $path, string $file, string $token): arra
     return [(int) substr($out, $pos + 1), json_decode(substr($out, 0, $pos), true)];
 }
 
+/** Conversación MCP con `point mcp` en el proyecto: respuestas indexadas por id. */
+function guideMcp(string $app, array $db, string $as, array $messages): array
+{
+    $env = array_merge(getenv(), ['APP_ENV' => 'development', 'DB_DSN' => $db[0], 'DB_USER' => $db[1], 'DB_PASS' => $db[2]]);
+    unset($env['POINT_TESTING']);
+    $proc = proc_open(['php', 'point', 'mcp', "--as=$as"], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $app, $env);
+    foreach ($messages as $m) {
+        fwrite($pipes[0], json_encode(['jsonrpc' => '2.0'] + $m) . "\n");
+    }
+    fclose($pipes[0]);
+    $responses = [];
+    while (($line = fgets($pipes[1])) !== false) {
+        $r = json_decode($line, true);
+        $responses[$r['id']] = $r;
+    }
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($proc);
+    return $responses;
+}
+
 function guideData(array $result): mixed
 {
     return json_decode($result[0], true);
@@ -129,7 +150,7 @@ function guideData(array $result): mixed
 
 test('guías: cada bloque de código indica un archivo dentro del proyecto', function () {
     $guides = array_map('basename', glob(dirname(__DIR__) . '/docs/guias/*.md'));
-    expect(count($guides))->toBeGreaterThan(2);
+    expect(count($guides))->toBe(8);
     foreach ($guides as $g) {
         $blocks = guideBlocks($g);
         expect(count($blocks))->toBeGreaterThan(0);
@@ -315,6 +336,26 @@ test('guías: el proyecto Tareas funciona siguiendo los pasos en orden', functio
                 proc_terminate($server);
                 proc_close($server);
             }
+
+            // Guía 8: endpoints para asistentes de IA (point mcp) y el proyecto final pasa PHPStan (CI del lector)
+            guideApply($app, '08-produccion.md');
+            $mcp = guideMcp($app, $db, (string) $u, [
+                ['id' => 1, 'method' => 'tools/list'],
+                ['id' => 2, 'method' => 'tools/call', 'params' => ['name' => 'dashboard', 'arguments' => (object) []]],
+                ['id' => 3, 'method' => 'tools/call', 'params' => ['name' => 'tasks_create', 'arguments' => ['project_id' => $p, 'title' => 'Preparar la demo', 'due_date' => '2030-01-05']]],
+                ['id' => 4, 'method' => 'tools/call', 'params' => ['name' => 'tasks_create', 'arguments' => ['project_id' => $p, 'title' => 'Preparar la demo', 'due_date' => '2030-01-07']]],
+            ]);
+            $tools = array_column($mcp[1]['result']['tools'], 'name');
+            sort($tools);
+            expect($tools)->toBe(['dashboard', 'tasks_create']);
+            expect($mcp[2]['result']['isError'])->toBeFalse();
+            expect($mcp[3]['result']['isError'])->toBeTrue();
+            expect($mcp[3]['result']['content'][0]['text'])->toContain('no puede caer en fin de semana');
+            expect($mcp[4]['result']['isError'])->toBeFalse();
+
+            [$stan, $stanCode] = guideExec($app, $db, 'php ' . escapeshellarg("$root/vendor/bin/phpstan") . ' analyse --no-progress --memory-limit=1G');
+            expect($stan)->toContain('[OK] No errors');
+            expect($stanCode)->toBe(0);
         } finally {
             shell_exec('rm -rf ' . escapeshellarg($dir));
         }

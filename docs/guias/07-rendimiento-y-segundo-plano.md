@@ -395,6 +395,5 @@ git add . && git commit -m "Guía 7: caché, idempotencia, eventos, jobs, schedu
 - `->asyncable()` convierte un endpoint lento en un ticket que se consulta en `/jobs/{id}`.
 - Los **plugins** amplían Point sin engordar el núcleo.
 
-**Próximamente:** Guía 8, a producción. Mientras tanto, el despliegue está en
-[la guía de inicio](../GUIA_INICIO.md#despliegue-en-railway). Recuerda que en producción el worker es un
-proceso aparte (`php point work`).
+**Siguiente:** [Guía 8: a producción](08-produccion.md), donde publicamos la API con el worker, el
+scheduler, la CI y un asistente de IA.

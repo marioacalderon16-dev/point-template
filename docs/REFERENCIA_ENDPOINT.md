@@ -341,7 +341,7 @@ GET  /jobs/7f3a…                                             →  {"state":"do
 - `GET /jobs/{id}` solo lo ve quien lanzó el trabajo (con su token). El resultado se guarda 24 h (`->asyncable(keep: 3600)`).
 - Avance desde el handler o la acción: `Core\Job::progress(40)`.
 - Si falla: `{"state":"failed","error":…}` (el detalle, solo en desarrollo). Se ejecuta una sola vez, sin reintentos.
-- Necesita el worker: `php point work`. En desarrollo, con `QUEUE_SYNC=true`, se ejecuta al momento.
+- Necesita el worker: `php point work` (con la imagen Docker, `WORKER_ENABLED=true`, en el mismo contenedor). En desarrollo, con `QUEUE_SYNC=true`, se ejecuta al momento.
 - El handler no debe leer cabeceras ni `$_SERVER`: en el worker no hay petición HTTP (las acciones ya cumplen esto).
 - Junto con `->idempotent()`, un reintento del cliente no crea dos trabajos.
 

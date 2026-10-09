@@ -67,7 +67,7 @@ La guía usa algunos servicios como ejemplo, pero ninguno es necesario:
 | Sugerencia | Sin ella… |
 |---|---|
 | Neon / Supabase | Cualquier otro Postgres o MySQL, local o en la nube |
-| Railway | Cualquier plataforma con Docker o un hosting PHP tradicional. Las migraciones y el cron del scheduler se configuran a mano ([ver guía](docs/GUIA_INICIO.md#sin-railway-supabase-ni-neon)) |
+| Railway | Cualquier plataforma con Docker o un hosting PHP tradicional. Las migraciones y el cron del scheduler se configuran a mano ([ver guía](docs/guias/08-produccion.md#paso-8-sin-railway-supabase-ni-neon)) |
 | GitHub + CI | Funciona igual; solo se pierde la ejecución automática de tests en cada push |
 | `.env.testing` | Los tests usan la base de desarrollo (con un aviso) |
 
