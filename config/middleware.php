@@ -20,6 +20,7 @@ return [
         'protected'     => ['auth'],   // default de make:endpoint
         'authenticated' => ['auth'],
         'admin'         => ['auth:admin'],
+        'staff'         => ['auth:admin,editor'],   // ejemplo: varios roles permitidos
     ],
 
     'inline' => [],

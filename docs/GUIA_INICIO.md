@@ -242,6 +242,28 @@ curl -s -X POST http://localhost:8090/users -H "Content-Type: application/json" 
 # repetir el primero → 422 (email duplicado)
 ```
 
+### Reglas reutilizables (`App\Services\Rules`)
+
+Para no repetir las mismas cadenas de reglas en cada endpoint, `services/Rules.php` las agrupa.
+Cada método devuelve un array de reglas que se puede combinar con reglas escritas a mano:
+
+```php
+use App\Services\Rules;
+
+->expects([
+    'id'     => Rules::id(),                       // entero >= 1
+    'ref'    => Rules::uuid(required: false),
+    'status' => Rules::status(Status::class),      // casos de un enum respaldado, o ['a', 'b']
+    'email'  => Rules::email(),                    // trim + minúsculas + email + max:255
+    'name'   => Rules::text(max: 100, min: 2),
+    'active' => Rules::boolean(required: false),
+    'since'  => Rules::date(),                     // Y-m-d
+    ...Rules::pagination(),                        // page (por defecto 1) y limit (por defecto 20, máx. 100)
+])
+```
+
+`Rules::status()` lanza una excepción si la lista está vacía o si algún valor contiene una coma.
+
 ## Paso 10: tests automáticos
 
 ```bash
@@ -314,8 +336,22 @@ Aserciones disponibles: `toBe`, `toEqual`, `toBeTrue`, `toBeFalse`, `toBeNull`, 
 ## Paso 11: endpoint protegido con JWT `GET /me`
 
 Grupos de `config/middleware.php`: `public` (sin middlewares), `protected` (exige token; es el
-default de `make:endpoint`), `authenticated` (igual que `protected`) y `admin` (token con claim
-`role` = `admin`). Un grupo no declarado responde 500 en lugar de dejar pasar la petición.
+default de `make:endpoint`), `authenticated` (igual que `protected`), `admin` (token con claim
+`role` = `admin`) y `staff` (ejemplo con varios roles: `auth:admin,editor`). Un grupo no declarado
+responde 500 en lugar de dejar pasar la petición.
+
+Para proteger por rol, se emite el token con el claim `role` y se declara el grupo que haga falta:
+
+```php
+// config/middleware.php → 'groups'
+'staff' => ['auth:admin,editor'],
+
+// al emitir el token (por ejemplo, en el login)
+$token = Core\Auth::issue(['sub' => $user['id'], 'role' => $user['role']]);
+
+// en el endpoint
+->group('staff')   // sin token: 401 · rol no permitido: 403 · admin o editor: pasa
+```
 
 ```bash
 php point make:endpoint me
