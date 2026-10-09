@@ -1,0 +1,16 @@
+parameters:
+    level: 2
+    paths:
+        - core
+        - services
+        - plugins
+        - endpoints
+        - config
+        - jobs
+        - middlewares
+        - listeners
+        - bootstrap.php
+        - deploy.php
+        - index.php
+    excludePaths:
+        - vendor/*

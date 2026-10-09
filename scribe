@@ -1,0 +1,161 @@
+#!/usr/bin/env php
+<?php
+
+// ============== CONFIGURACIÓN ==============
+require __DIR__ . '/vendor/autoload.php';
+
+// Igual que bootstrap.php: el entorno del proceso (Docker/Railway, tests) tiene prioridad y
+// .env (opcional) solo completa las variables que falten
+foreach (getenv() as $key => $value) {
+    $_ENV[$key] ??= $value;
+}
+Dotenv\Dotenv::createImmutable(__DIR__)->safeLoad();
+$envFile = __DIR__ . '/.env.' . ($_ENV['APP_ENV'] ?? 'development');
+if (file_exists($envFile)) {
+    Dotenv\Dotenv::createImmutable(__DIR__, '.env.' . $_ENV['APP_ENV'])->safeLoad();
+}
+
+require __DIR__ . '/core/scribe/Table.php';
+require __DIR__ . '/core/scribe/Runner.php';
+require __DIR__ . '/core/scribe/Seeder.php';
+require __DIR__ . '/core/scribe/SeedRunner.php';
+
+function getPdo(): PDO
+{
+    if (($_ENV['DB_DSN'] ?? '') === '') {
+        fwrite(STDERR, "Error: DB_DSN no está definido (entorno o .env).\n");
+        exit(1);
+    }
+    return new PDO($_ENV['DB_DSN'], $_ENV['DB_USER'] ?? '', $_ENV['DB_PASS'] ?? '', [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+    ]);
+}
+
+function getRunner(): core\Scribe\Runner
+{
+    return new core\Scribe\Runner(getPdo(), __DIR__ . '/database/migrations');
+}
+
+// ============== COMANDOS ==============
+
+if ($argc < 2) {
+    exit("Uso: php scribe <comando>\nComandos: migrate, rollback, make:migration\n");
+}
+
+$command = $argv[1];
+
+// === MIGRATE ===
+if ($command === 'migrate') {
+    $runner = getRunner();
+    $done = $runner->up();
+    echo $done ? "✅ $done migraciones aplicadas.\n" : "Nada que migrar.\n";
+}
+
+// === ROLLBACK ===
+elseif ($command === 'rollback') {
+    $runner = getRunner();
+    $undone = $runner->down();
+    echo $undone ? "⏪ $undone tablas borradas.\n" : "No hay migraciones para deshacer.\n";
+}
+
+// === MAKE:MIGRATION ===
+elseif ($command === 'make:migration') {
+    if ($argc < 3) {
+        exit("Uso: php scribe make:migration <nombre_tabla> [create|alter]\n");
+    }
+
+    $table = preg_replace('/[^a-z0-9_]/', '', $argv[2]);
+    if (!$table)
+        exit("Nombre de tabla inválido\n");
+
+    $type = $argv[3] ?? 'create';
+    if (!in_array($type, ['create', 'alter'])) {
+        exit("Tipo debe ser 'create' o 'alter'\n");
+    }
+
+    $ts = date('Y_m_d_His');
+    $dir = __DIR__ . '/database/migrations';
+    // ✅ Añadimos el prefijo según el tipo
+    $prefix = $type === 'create' ? 'create' : 'alter';
+    $file = "$dir/{$ts}_{$prefix}_{$table}.table.php";
+
+    if (!is_dir($dir))
+        mkdir($dir, 0777, true);
+
+    if ($type === 'create') {
+        $stub = "<?php\nuse Core\Scribe\Table;\n\nreturn Table::create('{$table}')\n    ->id()\n    ->str('name')\n    ->stamp();\n";
+    } else {
+        $stub = "<?php\nuse Core\Scribe\Table;\n\nreturn Table::alter('{$table}')\n    ->addColumn('new_column')\n        ->str(50)\n        ->nullable()\n        ->default('default_value')\n    ->index();\n";
+    }
+
+    file_put_contents($file, $stub);
+    echo "✅ Creado: " . basename($file) . "\n";
+}
+
+// === SEED ===
+elseif ($command === 'seed') {
+    $pdo = getPdo();
+
+    $seedDir = __DIR__ . '/database/seeds';
+    if (!is_dir($seedDir)) {
+        echo "⚠️ No existe el directorio de seeds.\n";
+        exit(0);
+    }
+
+    $runner = new core\Scribe\SeedRunner($pdo, $seedDir);
+    $run = $runner->run();
+
+    echo $run ? "✅ $run seeds ejecutados.\n" : "Todos los seeds ya fueron ejecutados.\n";
+}
+
+// === MAKE:SEED ===
+elseif ($command === 'make:seed') {
+    if ($argc < 3) {
+        exit("Uso: php scribe make:seed <nombre_tabla>\n");
+    }
+
+    $table = preg_replace('/[^a-z0-9_]/', '', $argv[2]);
+    if (!$table)
+        exit("Nombre de tabla inválido\n");
+
+    $dir = __DIR__ . '/database/seeds';
+    if (!is_dir($dir))
+        mkdir($dir, 0777, true);
+
+    // Calcular siguiente número
+    $files = glob($dir . '/*.seed.php');
+    $max = 0;
+    foreach ($files as $f) {
+        if (preg_match('/^(\d+)_/', basename($f), $m)) {
+            $num = (int) $m[1];
+            if ($num > $max)
+                $max = $num;
+        }
+    }
+    $next = sprintf('%02d', $max + 1);
+
+    $file = "$dir/{$next}_{$table}.seed.php";
+
+    if (!is_dir($dir))
+        mkdir($dir, 0777, true);
+
+    $stub = "<?php
+return [
+    'table' => '$table',
+    'data' => [
+        // [
+        //     'name' => 'John',
+        //     'email' => 'john@example.com',
+        // ],
+    ],
+];
+";
+
+    file_put_contents($file, $stub);
+    echo "✅ Creado: " . basename($file) . "\n";
+}
+
+// === COMANDO DESCONOCIDO ===
+else {
+    exit("Comando desconocido: $command\n");
+}

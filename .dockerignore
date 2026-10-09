@@ -1,0 +1,14 @@
+# COPY . . del Dockerfile: nunca meter secretos ni artefactos de desarrollo en la imagen
+.env
+.env.*
+!.env.example
+.git
+.claude
+vendor
+tests
+storage/logs/*
+storage/cache/*
+storage/jobs/*
+storage/ratelimit/*
+*.sqlite
+.DS_Store

@@ -1,0 +1,1703 @@
+#!/usr/bin/env php
+<?php
+
+$argv = $_SERVER['argv'] ?? [];
+$command = $argv[1] ?? null;
+
+match ($command) {
+    'init' => init($argv[2] ?? null),
+    'serve' => serve($argv[2] ?? '8080'),
+    'routes' => listRoutes(),
+    'cache' => cacheRoutes(),
+    'cache:clear' => clearRouteCache(),
+    'openapi' => generateOpenApi(array_slice($argv, 2)),
+    'test' => runTests($argv[2] ?? null),
+    'work' => work($argv),
+    'work:failed' => workFailed(),
+    'work:retry' => workRetry(),
+    'work:flush' => workFlush(),
+    'db:sql' => dbSql(array_slice($argv, 2)),
+    'make:endpoint' => createEndpoint(array_slice($argv, 2)),
+    'make:middleware' => createMiddleware($argv[2] ?? null),
+    'make:service' => createService($argv[2] ?? null),
+    'make:job' => createJob($argv[2] ?? null),
+    'make:listener' => createListener($argv[2] ?? null),
+    'make:test' => createTest($argv[2] ?? null),
+    'make:migration' => delegateScribe('make:migration', array_slice($argv, 2)),
+    'make:seed' => delegateScribe('make:seed', array_slice($argv, 2)),
+    'migrate' => delegateScribe('migrate', []),
+    'rollback' => delegateScribe('rollback', []),
+    'seed' => delegateScribe('seed', []),
+    'make:plugin' => createPlugin($argv[2] ?? null),
+    'plugin:list' => listPlugins(),
+    'plugin:add' => addPlugin($argv[2] ?? null),
+    'plugin:remove' => removePlugin(array_slice($argv, 2)),
+    default => help(),
+};
+
+function requireProject(): void
+{
+    if (!file_exists('vendor/autoload.php')) {
+        echo "Error: Ejecuta 'composer install' primero.\n";
+        exit(1);
+    }
+    define('POINT_NO_MANIFEST', true);
+    require_once 'vendor/autoload.php';
+    require_once 'bootstrap.php';
+}
+
+function copyTree(string $from, string $to): void
+{
+    if (!is_dir($to)) {
+        mkdir($to, 0755, true);
+    }
+
+    foreach (scandir($from) ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..' || str_starts_with($entry, '.')) {
+            continue;
+        }
+        $src = "$from/$entry";
+        $dst = "$to/$entry";
+        is_dir($src) ? copyTree($src, $dst) : copy($src, $dst);
+    }
+}
+
+// ────────────────────────────────────────────────
+// INIT
+// ────────────────────────────────────────────────
+
+function init(?string $name): void
+{
+    if (!$name) {
+        echo "Uso: php point init nombre-del-proyecto\n";
+        exit(1);
+    }
+
+    if (is_dir($name)) {
+        echo "Error: El directorio '$name' ya existe.\n";
+        exit(1);
+    }
+
+    $source = __DIR__;
+
+    $dirs = [
+        '', 'core', 'core/Middleware', 'core/exceptions', 'core/scribe',
+        'endpoints', 'config', 'middlewares', 'services', 'jobs', 'listeners', 'tests',
+        'plugins', 'storage', 'storage/jobs', 'storage/jobs/failed',
+        'database', 'database/migrations', 'database/seeds',
+    ];
+    foreach ($dirs as $dir) {
+        mkdir("$name/$dir", 0755, true);
+    }
+
+    // Git no guarda carpetas vacías: sin .gitkeep, en un clon (CI) faltan rutas de phpstan.neon
+    foreach (['middlewares', 'services', 'jobs', 'listeners', 'database/migrations', 'database/seeds'] as $dir) {
+        touch("$name/$dir/.gitkeep");
+    }
+
+    // Core minimalista: todo lo opcional vive en plugins/
+    $coreFiles = [
+        'core/Endpoint.php',
+        'core/Resource.php',
+        'core/Auth.php',
+        'core/RouteRegistry.php',
+        'core/Connector.php',
+        'core/Validator.php',
+        'core/InputExtractor.php',
+        'core/QueryBuilder.php',
+        'core/DB.php',
+        'core/Container.php',
+        'core/ErrorHandler.php',
+        'core/Plugin.php',
+        'core/PluginManager.php',
+        'core/Log.php',
+        'core/Cache.php',
+        'core/Event.php',
+        'core/Response.php',
+        'core/UploadedFile.php',
+        'core/helpers.php',
+        'core/Testing.php',
+        'core/Queue.php',
+        'core/Middleware/MiddlewareManager.php',
+        'core/Middleware/AuthMiddleware.php',
+        'core/Middleware/CorsMiddleware.php',
+        'core/Middleware/SecurityHeadersMiddleware.php',
+        'core/Middleware/RateLimitMiddleware.php',
+        'core/Middleware/LoggerMiddleware.php',
+        'core/exceptions/RouteConfigException.php',
+        'core/scribe/Table.php',
+        'core/scribe/Runner.php',
+        'core/scribe/Seeder.php',
+        'core/scribe/SeedRunner.php',
+    ];
+
+    foreach ($coreFiles as $file) {
+        copy("$source/$file", "$name/$file");
+    }
+
+    // Plugins de base: health (GET /health, healthcheck de railway.json) y scheduler
+    // (scheduler + config/schedule.php, que el entrypoint de Docker ejecuta cada minuto).
+    // El resto se instala a demanda con plugin:add
+    $basePlugins = ['health', 'scheduler'];
+    foreach ($basePlugins as $slug) {
+        copyTree("$source/plugins/$slug", "$name/plugins/$slug");
+    }
+    file_put_contents("$name/config/plugins.php", str_replace(
+        "return [\n];",
+        "return [\n" . implode('', array_map(fn ($s) => "    '$s',\n", $basePlugins)) . "];",
+        pluginsConfigTemplate()
+    ));
+
+    // Origen desde donde plugin:add copiara los plugins
+    file_put_contents("$name/.point.json", json_encode([
+        'framework' => $source,
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+
+    copy("$source/index.php", "$name/index.php");
+    copy("$source/bootstrap.php", "$name/bootstrap.php");
+    copy("$source/scribe", "$name/scribe");
+    chmod("$name/scribe", 0755);
+    copy("$source/deploy.php", "$name/deploy.php");
+    copy("$source/.env.example", "$name/.env.example");
+    copy("$source/scheduler", "$name/scheduler");
+    chmod("$name/scheduler", 0755);
+    copy("$source/config/schedule.php", "$name/config/schedule.php");
+    copy("$source/endpoints/health.php", "$name/endpoints/health.php");
+
+    // Raíz web (DocumentRoot del Dockerfile); copyTree omite dotfiles como .htaccess
+    copyTree("$source/public", "$name/public");
+    copy("$source/public/.htaccess", "$name/public/.htaccess");
+
+    // Despliegue (Docker/Railway)
+    copy("$source/Dockerfile", "$name/Dockerfile");
+    copy("$source/railway.json", "$name/railway.json");
+    copy("$source/.dockerignore", "$name/.dockerignore");
+
+    // CI (GitHub Actions): Postgres desechable, migrate y tests en cada push
+    mkdir("$name/.github/workflows", 0755, true);
+    copy("$source/.github/workflows/ci.yml", "$name/.github/workflows/ci.yml");
+    copyTree("$source/docker", "$name/docker");
+
+    $env = file_get_contents("$source/.env.example");
+    $env = preg_replace('/^JWT_SECRET=.*$/m', 'JWT_SECRET=' . bin2hex(random_bytes(32)), $env);
+    file_put_contents("$name/.env", $env);
+    copy("$source/point", "$name/point");
+    chmod("$name/point", 0755);
+
+    // composer.json/lock de la plantilla (php ^8.4, autoload de listeners/, phpstan); el
+    // Dockerfile copia ambos
+    copy("$source/composer.json", "$name/composer.json");
+    copy("$source/composer.lock", "$name/composer.lock");
+    copy("$source/phpstan.neon", "$name/phpstan.neon");
+
+    $middlewareConfig = <<<'PHP'
+<?php
+
+return [
+
+    'individual' => [
+        'cors'       => [\Core\Middleware\CorsMiddleware::class, 'handle'],
+        'auth'       => [\Core\Middleware\AuthMiddleware::class, 'handle'],
+        'rate_limit' => [\Core\Middleware\RateLimitMiddleware::class, 'handle'],
+        'logger'     => [\Core\Middleware\LoggerMiddleware::class, 'handle'],
+        'security'   => [\Core\Middleware\SecurityHeadersMiddleware::class, 'handle'],
+    ],
+
+    'global' => [
+        'cors',
+        'security',
+    ],
+
+    'groups' => [
+        'protected' => ['auth'],
+        'admin'     => ['auth:admin'],
+    ],
+
+    'inline' => [],
+
+];
+PHP;
+    file_put_contents("$name/config/middleware.php", "$middlewareConfig\n");
+
+    $servicesConfig = <<<'PHP'
+<?php
+
+return [
+    // Bindings explicitos: clase/interfaz => factory
+    // Las clases en services/ se resuelven automaticamente via auto-wiring.
+];
+PHP;
+    file_put_contents("$name/config/services.php", "$servicesConfig\n");
+
+    $hello = <<<'PHP'
+<?php
+
+use Core\Endpoint;
+
+Endpoint::from(__FILE__)
+    ->at('GET /')
+    ->name('root.hello')
+    ->handle(fn() => [
+        'status' => 200,
+        'message' => 'Point framework is running!',
+    ]);
+PHP;
+    file_put_contents("$name/endpoints/hello.php", "$hello\n");
+
+    $gitignore = <<<'GI'
+# Dependencias
+vendor/
+
+# Entorno (contiene secretos)
+.env
+.env.*
+!.env.example
+
+# Cache y storage
+cache/
+storage/jobs/
+storage/logs/
+
+# Framework
+.point.json
+
+# Seeds (datos de prueba)
+database/seeds/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+GI;
+    file_put_contents("$name/.gitignore", "$gitignore\n");
+
+    echo "Proyecto '$name' creado (core minimalista, plugins: " . implode(', ', $basePlugins) . ").\n\n";
+    echo "  cd $name\n";
+    echo "  composer install\n";
+    echo "  php point serve\n\n";
+    echo "Plugins disponibles:\n";
+    echo "  php point plugin:list          ver que hay\n";
+    echo "  php point plugin:add ai        instalar uno\n";
+}
+
+// ────────────────────────────────────────────────
+// SERVE
+// ────────────────────────────────────────────────
+
+function serve(string $port): void
+{
+    echo "Point server en http://localhost:$port\n\n";
+    passthru("php -S localhost:$port index.php");
+}
+
+// ────────────────────────────────────────────────
+// ROUTES
+// ────────────────────────────────────────────────
+
+function listRoutes(): void
+{
+    requireProject();
+
+    $routes = \Core\RouteRegistry::getInstance()->getRoutes();
+
+    if (empty($routes)) {
+        echo "No hay rutas registradas.\n";
+        return;
+    }
+
+    usort($routes, fn($a, $b) => strcmp($a['path'], $b['path']));
+
+    $rows = [];
+    foreach ($routes as $route) {
+        $methods = implode('|', $route['methods']);
+        $path = $route['path'];
+        $name = $route['name'] ?? '-';
+        $group = $route['group'] ?? '-';
+
+        $pipeline = '';
+        if (!empty($route['connectsTo'])) {
+            $targets = array_map(function ($c) {
+                $name = is_array($c) ? $c['target'] : $c;
+                $cond = (is_array($c) && !empty($c['when'])) ? '?' : '';
+                return $cond . $name;
+            }, $route['connectsTo']);
+            $pipeline = implode(' -> ', $targets);
+        }
+
+        $flags = [];
+        if (!empty($route['guards'])) $flags[] = 'guard';
+        if (!empty($route['transform'])) $flags[] = 'transform';
+        if (!empty($route['onError'])) $flags[] = 'onError';
+        $flagStr = $flags ? '[' . implode(',', $flags) . ']' : '';
+
+        $rows[] = [$methods, $path, $name, $group, $pipeline, $flagStr];
+    }
+
+    $widths = [6, 4, 4, 5, 8, 5];
+    $headers = ['METHOD', 'PATH', 'NAME', 'GROUP', 'PIPELINE', 'FLAGS'];
+    foreach ($rows as $row) {
+        foreach ($row as $i => $col) {
+            $widths[$i] = max($widths[$i], strlen($col));
+        }
+    }
+    foreach ($headers as $i => $h) {
+        $widths[$i] = max($widths[$i], strlen($h));
+    }
+
+    $line = '  ';
+    foreach ($headers as $i => $h) {
+        $line .= str_pad($h, $widths[$i] + 2);
+    }
+    echo "\n$line\n";
+    echo '  ' . str_repeat('─', array_sum($widths) + count($widths) * 2) . "\n";
+
+    foreach ($rows as $row) {
+        $line = '  ';
+        foreach ($row as $i => $col) {
+            $line .= str_pad($col, $widths[$i] + 2);
+        }
+        echo "$line\n";
+    }
+    echo "\n";
+}
+
+// ────────────────────────────────────────────────
+// CACHE
+// ────────────────────────────────────────────────
+
+function cacheRoutes(): void
+{
+    requireProject();
+
+    // buildManifest usa los endpointDirs fijados por bootstrap (proyecto + plugins)
+    $manifest = \Core\RouteRegistry::getInstance()->buildManifest(getcwd());
+
+    if (!is_dir('cache')) {
+        mkdir('cache', 0755);
+    }
+    file_put_contents('cache/routes.php', '<?php return ' . var_export($manifest, true) . ';');
+
+    printf("%d rutas cacheadas en cache/routes.php (carga lazy activada)\n", count($manifest['routes']));
+}
+
+function clearRouteCache(): void
+{
+    if (file_exists('cache/routes.php')) {
+        unlink('cache/routes.php');
+        echo "Cache eliminado (carga completa activada).\n";
+    } else {
+        echo "No hay cache que eliminar.\n";
+    }
+}
+
+// ────────────────────────────────────────────────
+// OPENAPI
+// ────────────────────────────────────────────────
+
+function generateOpenApi(array $args = []): void
+{
+    requireProject();
+
+    $routes = \Core\RouteRegistry::getInstance()->getRoutes();
+    $paths = [];
+    $usesAuth = false;
+
+    foreach ($routes as $route) {
+        $routeParams = [];
+        preg_match_all('/\{([a-zA-Z0-9_]+)\}/', $route['path'], $matches);
+        $pathParamNames = $matches[1];
+
+        $isProtected = in_array($route['group'], ['protected', 'admin'], true)
+            || array_filter($route['through'] ?? [], fn($m) => str_starts_with($m, 'auth'));
+        if ($isProtected) {
+            $usesAuth = true;
+        }
+
+        foreach ($route['methods'] as $method) {
+            $isBodyMethod = in_array($method, ['POST', 'PUT', 'PATCH'], true);
+            $parameters = [];
+            $bodyProps = [];
+            $bodyRequired = [];
+
+            foreach ($route['expects'] ?? [] as $field => $ruleString) {
+                $rules = is_array($ruleString) ? array_values($ruleString) : explode('|', $ruleString);
+                $schema = rulesToSchema($rules);
+                $required = in_array('required', $rules, true);
+
+                $source = null;
+                foreach ($rules as $r) {
+                    if (str_starts_with($r, 'source:')) {
+                        $source = explode(',', substr($r, 7))[0];
+                        break;
+                    }
+                }
+
+                if (in_array($field, $pathParamNames, true) || $source === 'route') {
+                    $parameters[] = ['name' => $field, 'in' => 'path', 'required' => true, 'schema' => $schema];
+                } elseif ($source === 'query' || !$isBodyMethod) {
+                    $parameters[] = ['name' => $field, 'in' => 'query', 'required' => $required, 'schema' => $schema];
+                } else {
+                    $bodyProps[$field] = $schema;
+                    if ($required) {
+                        $bodyRequired[] = $field;
+                    }
+                }
+            }
+
+            // Parametros de ruta sin regla en expects
+            $declared = array_column($parameters, 'name');
+            foreach ($pathParamNames as $p) {
+                if (!in_array($p, $declared, true)) {
+                    $parameters[] = ['name' => $p, 'in' => 'path', 'required' => true, 'schema' => ['type' => 'string']];
+                }
+            }
+
+            $responses = ['200' => ['description' => 'OK']];
+            if (!empty($route['expects'])) {
+                $responses['422'] = ['description' => 'Validation failed'];
+            }
+            if ($isProtected) {
+                $responses['401'] = ['description' => 'No autenticado'];
+                $responses['403'] = ['description' => 'Permisos insuficientes'];
+            }
+
+            $segments = array_filter(explode('/', trim($route['path'], '/')));
+            $operation = [
+                'operationId' => ($route['name'] ?? strtolower($method) . str_replace('/', '.', $route['path'])) . '.' . strtolower($method),
+                'tags' => [reset($segments) ?: 'root'],
+                'responses' => $responses,
+            ];
+
+            if ($parameters) {
+                $operation['parameters'] = $parameters;
+            }
+            if ($bodyProps) {
+                $bodySchema = ['type' => 'object', 'properties' => $bodyProps];
+                if ($bodyRequired) {
+                    $bodySchema['required'] = $bodyRequired;
+                }
+                $operation['requestBody'] = [
+                    'required' => true,
+                    'content' => ['application/json' => ['schema' => $bodySchema]],
+                ];
+            }
+            if ($isProtected) {
+                $operation['security'] = [['bearerAuth' => []]];
+            }
+
+            $paths[$route['path']][strtolower($method)] = $operation;
+        }
+    }
+
+    $spec = [
+        'openapi' => '3.0.3',
+        'info' => ['title' => basename(getcwd()), 'version' => '1.0.0'],
+        'paths' => $paths,
+    ];
+    if ($usesAuth) {
+        $spec['components'] = [
+            'securitySchemes' => [
+                'bearerAuth' => ['type' => 'http', 'scheme' => 'bearer', 'bearerFormat' => 'JWT'],
+            ],
+        ];
+    }
+
+    file_put_contents('openapi.json', json_encode($spec, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n");
+    printf("openapi.json generado (%d rutas)\n", count($paths));
+
+    if (in_array('--serve', $args, true)) {
+        $port = 8081;
+        foreach ($args as $arg) {
+            if (str_starts_with($arg, '--port=')) {
+                $port = (int) substr($arg, 7);
+            }
+        }
+        serveOpenApi($port);
+    }
+}
+
+/** Swagger UI (via CDN) apuntando al openapi.json ya generado; nada que commitear. */
+function serveOpenApi(int $port): void
+{
+    $dir = sys_get_temp_dir() . '/point_openapi_' . bin2hex(random_bytes(4));
+    mkdir($dir, 0755, true);
+    copy('openapi.json', "$dir/openapi.json");
+
+    file_put_contents("$dir/index.html", <<<HTML
+<!doctype html>
+<html>
+<head>
+  <title>API docs</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = () => SwaggerUIBundle({ url: '/openapi.json', dom_id: '#swagger-ui' });
+  </script>
+</body>
+</html>
+HTML);
+
+    echo "Sirviendo documentacion en http://localhost:$port (Ctrl+C para salir)\n\n";
+    passthru('php -S localhost:' . $port . ' -t ' . escapeshellarg($dir));
+}
+
+function rulesToSchema(array $rules): array
+{
+    $schema = ['type' => 'string'];
+
+    // Primera pasada: tipo
+    foreach ($rules as $rule) {
+        $name = explode(':', $rule, 2)[0];
+        match ($name) {
+            'integer' => $schema['type'] = 'integer',
+            'numeric' => $schema['type'] = 'number',
+            'boolean' => $schema['type'] = 'boolean',
+            'array' => $schema['type'] = 'array',
+            default => null,
+        };
+    }
+
+    $isNumeric = in_array($schema['type'], ['integer', 'number'], true);
+
+    foreach ($rules as $rule) {
+        [$name, $param] = array_pad(explode(':', $rule, 2), 2, null);
+        switch ($name) {
+            case 'email': $schema['format'] = 'email'; break;
+            case 'url': $schema['format'] = 'uri'; break;
+            case 'uuid': $schema['format'] = 'uuid'; break;
+            case 'date': $schema['format'] = 'date'; break;
+            case 'ip': $schema['format'] = 'ip'; break;
+            case 'in':
+                $schema['enum'] = array_map('trim', explode(',', $param));
+                break;
+            case 'each':
+                $schema['type'] = 'array';
+                $schema['items'] = rulesToSchema([$param]);
+                break;
+            case 'min':
+                $schema[$isNumeric ? 'minimum' : 'minLength'] = $isNumeric ? (float) $param : (int) $param;
+                break;
+            case 'max':
+                $schema[$isNumeric ? 'maximum' : 'maxLength'] = $isNumeric ? (float) $param : (int) $param;
+                break;
+            case 'between':
+                $limits = array_map('trim', explode(',', $param));
+                if (count($limits) === 2) {
+                    $schema[$isNumeric ? 'minimum' : 'minLength'] = $isNumeric ? (float) $limits[0] : (int) $limits[0];
+                    $schema[$isNumeric ? 'maximum' : 'maxLength'] = $isNumeric ? (float) $limits[1] : (int) $limits[1];
+                }
+                break;
+            case 'default':
+                $schema['default'] = $param;
+                break;
+        }
+    }
+
+    if ($schema['type'] === 'array' && !isset($schema['items'])) {
+        $schema['items'] = ['type' => 'string'];
+    }
+
+    return $schema;
+}
+
+// ────────────────────────────────────────────────
+// MAKE:ENDPOINT
+// ────────────────────────────────────────────────
+
+function createEndpoint(array $args): void
+{
+    if (empty($args)) {
+        echo "Uso: php point make:endpoint <ruta> [--post|--put|--patch|--delete] [--group=nombre] [--public]\n";
+        echo "Ejemplo: php point make:endpoint users/create --post --group=admin_area\n";
+        exit(1);
+    }
+
+    $userPath = $args[0];
+    $httpMethod = 'GET';
+    $group = 'protected';
+
+    $methodMap = [
+        '--get' => 'GET', '--post' => 'POST', '--put' => 'PUT',
+        '--patch' => 'PATCH', '--delete' => 'DELETE',
+    ];
+
+    for ($i = 1; $i < count($args); $i++) {
+        $arg = $args[$i];
+
+        if (str_starts_with($arg, '--method=')) {
+            $method = strtoupper(substr($arg, 9));
+            if (!in_array($method, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+                echo "Metodo HTTP invalido: $method\n";
+                exit(1);
+            }
+            $httpMethod = $method;
+        } elseif (str_starts_with($arg, '--group=')) {
+            $group = substr($arg, 8);
+        } elseif ($arg === '--public') {
+            $group = 'public';
+        } elseif (isset($methodMap[$arg])) {
+            $httpMethod = $methodMap[$arg];
+        } else {
+            echo "Opcion desconocida: $arg\n";
+            exit(1);
+        }
+    }
+
+    $internalPath = preg_replace('/\:([a-zA-Z_][a-zA-Z0-9_]*)/', '{$1}', $userPath);
+
+    $segments = array_values(array_filter(explode('/', trim($userPath, '/'))));
+    if (empty($segments)) {
+        echo "Ruta invalida.\n";
+        exit(1);
+    }
+
+    $lastSegment = end($segments);
+    $lastIsParam = preg_match('/^:/', $lastSegment);
+
+    if ($lastIsParam) {
+        $filenameBase = count($segments) >= 2 ? $segments[count($segments) - 2] : 'item';
+        $dirSegments = array_slice($segments, 0, max(0, count($segments) - 2));
+        $endpointSegments = array_slice($segments, 0, -1);
+    } else {
+        $filenameBase = $lastSegment;
+        $dirSegments = array_slice($segments, 0, -1);
+        $endpointSegments = $segments;
+    }
+
+    $dir = implode(DIRECTORY_SEPARATOR, $dirSegments);
+    $fullDir = 'endpoints' . ($dir ? DIRECTORY_SEPARATOR . $dir : '');
+    $fullPath = "$fullDir/$filenameBase.php";
+
+    if (!is_dir($fullDir)) {
+        mkdir($fullDir, 0755, true);
+    }
+
+    if (file_exists($fullPath)) {
+        echo "El endpoint ya existe: $fullPath\n";
+        exit(1);
+    }
+
+    $endpointName = implode('.', $endpointSegments);
+    $routePath = '/' . trim($internalPath, '/');
+
+    $content = <<<PHP
+<?php
+
+use Core\Endpoint;
+
+Endpoint::from(__FILE__)
+    ->at('$httpMethod $routePath')
+    ->name('$endpointName')
+    ->group('$group')
+    ->expects([
+        // 'campo' => 'required|string|min:3',
+    ])
+    ->handle(function (\$input) {
+        return [
+            'status' => 200,
+            'message' => '$endpointName',
+            'data' => [],
+        ];
+    });
+PHP;
+
+    file_put_contents($fullPath, "$content\n");
+    echo "Endpoint creado: $fullPath ($httpMethod $routePath) grupo '$group'\n";
+}
+
+// ────────────────────────────────────────────────
+// MAKE:MIDDLEWARE
+// ────────────────────────────────────────────────
+
+function createMiddleware(?string $name): void
+{
+    if (!$name) {
+        echo "Uso: php point make:middleware NombreMiddleware\n";
+        exit(1);
+    }
+
+    $className = ucfirst(preg_replace('/[^a-zA-Z0-9]/', '', $name)) . 'Middleware';
+    $filename = "middlewares/$className.php";
+
+    if (!is_dir('middlewares')) {
+        mkdir('middlewares', 0755, true);
+    }
+
+    if (file_exists($filename)) {
+        echo "Ya existe: $filename\n";
+        exit(1);
+    }
+
+    $content = <<<PHP
+<?php
+namespace App\Middlewares;
+
+class $className
+{
+    public static function handle(\$params, &\$input, \$context): bool|array
+    {
+        // Retornar false para bloquear la peticion
+        // Retornar array para inyectar datos al input
+        // Retornar true para continuar
+
+        return true;
+    }
+}
+PHP;
+
+    file_put_contents($filename, "$content\n");
+    echo "Middleware creado: $filename\n";
+    echo "Registralo en config/middleware.php:\n";
+    echo "  '$name' => [\\App\\Middlewares\\$className::class, 'handle'],\n";
+}
+
+// ────────────────────────────────────────────────
+// MAKE:SERVICE
+// ────────────────────────────────────────────────
+
+function createService(?string $name): void
+{
+    if (!$name) {
+        echo "Uso: php point make:service NombreService\n";
+        exit(1);
+    }
+
+    $className = ucfirst(preg_replace('/[^a-zA-Z0-9]/', '', $name)) . 'Service';
+    $filename = "services/$className.php";
+
+    if (!is_dir('services')) {
+        mkdir('services', 0755, true);
+    }
+
+    if (file_exists($filename)) {
+        echo "Ya existe: $filename\n";
+        exit(1);
+    }
+
+    $table = strtolower(str_replace('Service', '', $className)) . 's';
+
+    $content = <<<PHP
+<?php
+namespace App\Services;
+
+use Core\DB;
+
+// Uso en endpoint:
+//   ->uses(\\App\\Services\\$className::class)
+//   ->handle(fn(\$data, \$service) => \$service->all())
+//
+// O con helper:
+//   ->handle(fn(\$data) => service(\\App\\Services\\$className::class)->all())
+
+class $className
+{
+    public function all(): array
+    {
+        return DB::table('$table')->get();
+    }
+
+    public function find(int \$id): ?array
+    {
+        return DB::table('$table')->find(\$id);
+    }
+
+    public function create(array \$data): int
+    {
+        return DB::table('$table')->insert(\$data);
+    }
+
+    public function update(int \$id, array \$data): int
+    {
+        return DB::table('$table')->where('id', \$id)->update(\$data);
+    }
+
+    public function delete(int \$id): int
+    {
+        return DB::table('$table')->where('id', \$id)->delete();
+    }
+}
+PHP;
+
+    file_put_contents($filename, "$content\n");
+    echo "Service creado: $filename\n";
+}
+
+// ────────────────────────────────────────────────
+// TEST
+// ────────────────────────────────────────────────
+
+function runTests(?string $filter = null): void
+{
+    if (!file_exists('vendor/autoload.php')) {
+        echo "Error: Ejecuta 'composer install' primero.\n";
+        exit(1);
+    }
+
+    require_once 'vendor/autoload.php';
+    require_once __DIR__ . '/core/Testing.php';
+
+    $testsDir = getcwd() . '/tests';
+
+    if (!is_dir($testsDir)) {
+        echo "No existe el directorio tests/\n";
+        exit(1);
+    }
+
+    // El servidor de test hereda esta variable y carga tests/fixtures/endpoints
+    putenv('POINT_TESTING=1');
+    // Contadores de rate limit aislados por ejecución (no arrastra intentos de corridas previas)
+    putenv('RATE_LIMIT_DIR=' . sys_get_temp_dir() . '/point-ratelimit-' . getmypid());
+
+    // Mismo entorno que el servidor de test (proceso primero, luego .env): así Auth::issue() en
+    // un test firma con el JWT_SECRET que verifica el servidor. Sin uno válido, uno por corrida
+    $dsnFromProcess = getenv('DB_DSN') !== false;
+    foreach (getenv() as $key => $value) {
+        $_ENV[$key] ??= $value;
+    }
+    // .env.testing (opcional, p. ej. DB_DSN de una base solo para tests) va antes que .env; lo que
+    // carga se exporta para que el servidor de test y scribe lo hereden. El proceso sigue mandando
+    $testingVars = [];
+    if (file_exists(getcwd() . '/.env.testing')) {
+        $testingVars = Dotenv\Dotenv::createImmutable(getcwd(), '.env.testing')->safeLoad();
+        foreach ($testingVars as $key => $value) {
+            putenv("$key=$value");
+        }
+    }
+    Dotenv\Dotenv::createImmutable(getcwd())->safeLoad();
+    if (file_exists(getcwd() . '/.env.' . ($_ENV['APP_ENV'] ?? 'development'))) {
+        Dotenv\Dotenv::createImmutable(getcwd(), '.env.' . ($_ENV['APP_ENV'] ?? 'development'))->safeLoad();
+    }
+    if (strlen($_ENV['JWT_SECRET'] ?? '') < 32) {
+        $_ENV['JWT_SECRET'] = bin2hex(random_bytes(32));
+        putenv('JWT_SECRET=' . $_ENV['JWT_SECRET']);
+    }
+
+    // Con base propia de tests se migra antes de ejecutarlos (como en CI); sin ella, avisar
+    if (isset($testingVars['DB_DSN'])) {
+        passthru('php scribe migrate', $code);
+        if ($code !== 0) {
+            echo "Error: no se pudo migrar la base de tests (.env.testing).\n";
+            exit(1);
+        }
+    } elseif (!$dsnFromProcess && ($_ENV['DB_DSN'] ?? '') !== '') {
+        echo "Aviso: los tests usan la base de .env (desarrollo). Crea .env.testing con DB_DSN de una base solo para tests.\n";
+    }
+
+    $files = \Core\TestRunner::discover($testsDir);
+
+    if (empty($files)) {
+        echo "No se encontraron archivos *_test.php o *Test.php en tests/\n";
+        exit(0);
+    }
+
+    $nameFilter = null;
+
+    if ($filter) {
+        $matchedFiles = array_filter($files, fn($f) => stripos($f, $filter) !== false);
+        if (!empty($matchedFiles)) {
+            $files = array_values($matchedFiles);
+        } else {
+            $nameFilter = $filter;
+        }
+    }
+
+    echo "\n  Point Test Runner\n";
+
+    $exitCode = \Core\TestRunner::loadAndRun($files, $nameFilter);
+    echo "\n";
+    exit($exitCode);
+}
+
+// ────────────────────────────────────────────────
+// WORK (Queue)
+// ────────────────────────────────────────────────
+
+/** Carga la app (.env, DB, helpers, plugins) sin registrar rutas. */
+function requireApp(): void
+{
+    if (!file_exists('vendor/autoload.php')) {
+        echo "Error: Ejecuta 'composer install' primero.\n";
+        exit(1);
+    }
+    if (!defined('POINT_NO_ROUTES')) define('POINT_NO_ROUTES', true);
+    require_once 'vendor/autoload.php';
+    require_once 'bootstrap.php';
+}
+
+/** Valor de una opción --nombre=valor, o null. */
+function cliOption(array $argv, string $name): ?string
+{
+    foreach ($argv as $arg) {
+        if (str_starts_with($arg, "--{$name}=")) return substr($arg, strlen($name) + 3);
+    }
+    return null;
+}
+
+function work(array $argv): void
+{
+    requireApp();
+
+    $once = in_array('--once', $argv);
+    $maxJobs = (int) (cliOption($argv, 'max-jobs') ?? 0);
+    $maxTime = (int) (cliOption($argv, 'max-time') ?? 0);
+    $start = time();
+
+    // SIGTERM/SIGINT: terminar el job actual y salir
+    $stop = false;
+    if (function_exists('pcntl_async_signals')) {
+        pcntl_async_signals(true);
+        $handler = function () use (&$stop) { $stop = true; };
+        pcntl_signal(SIGTERM, $handler);
+        pcntl_signal(SIGINT, $handler);
+    }
+
+    echo "Point worker " . ($once ? "(once)" : "started") . "\n";
+
+    $processed = 0;
+    $result = null;
+
+    do {
+        if ($stop) { echo "  Señal recibida, saliendo.\n"; break; }
+        if ($maxJobs > 0 && $processed >= $maxJobs) { echo "  Alcanzado --max-jobs={$maxJobs}.\n"; break; }
+        if ($maxTime > 0 && time() - $start >= $maxTime) { echo "  Alcanzado --max-time={$maxTime}s.\n"; break; }
+
+        $result = \Core\Queue::processNext();
+
+        if ($result) {
+            $processed++;
+            $icon = match ($result['status']) {
+                'ok' => "\033[32mOK\033[0m",
+                'retry' => "\033[33mRETRY\033[0m",
+                'failed' => "\033[31mFAILED\033[0m",
+            };
+            $name = basename(str_replace('\\', '/', $result['job']));
+            echo "  [$icon] $name";
+            if (isset($result['error'])) echo " - {$result['error']}";
+            if (isset($result['attempt'])) echo " (intento {$result['attempt']})";
+            echo "\n";
+
+            if ($once) break;
+        } elseif (!$once) {
+            $wait = $maxTime > 0 ? max(0, min(3, $maxTime - (time() - $start))) : 3;
+            if ($wait > 0) sleep($wait);
+        }
+    } while (!$once);
+
+    if ($once && !$result) {
+        echo "  No hay jobs pendientes.\n";
+    }
+}
+
+function workFailed(): void
+{
+    requireApp();
+
+    $failed = \Core\Queue::failed();
+
+    if (empty($failed)) {
+        echo "No hay jobs fallidos.\n";
+        return;
+    }
+
+    echo sprintf("  %-20s %-40s %-20s %s\n", 'ID', 'JOB', 'FAILED AT', 'ERROR');
+    echo "  " . str_repeat('-', 100) . "\n";
+
+    foreach ($failed as $job) {
+        $name = basename(str_replace('\\', '/', $job['job']));
+        $id = substr($job['id'] ?? '', 0, 18);
+        echo sprintf("  %-20s %-40s %-20s %s\n",
+            $id,
+            $name,
+            $job['failed_at'] ?? '-',
+            substr($job['last_error'] ?? '-', 0, 40)
+        );
+    }
+
+    echo "\n  " . count($failed) . " job(s) fallido(s). Usa 'php point work:retry' para reintentar.\n";
+}
+
+function workRetry(): void
+{
+    requireApp();
+
+    $count = \Core\Queue::retry();
+    echo $count > 0
+        ? "$count job(s) movido(s) de vuelta a la cola.\n"
+        : "No hay jobs fallidos para reintentar.\n";
+}
+
+function workFlush(): void
+{
+    requireApp();
+
+    $count = \Core\Queue::flush();
+    echo $count > 0
+        ? "$count job(s) fallido(s) eliminados.\n"
+        : "No hay jobs fallidos.\n";
+}
+
+// ────────────────────────────────────────────────
+// DB:SQL (SQL crudo versionado en database/sql)
+// ────────────────────────────────────────────────
+
+function dbSql(array $args): void
+{
+    requireApp();
+
+    $force = in_array('--force', $args, true);
+    $files = in_array('--all', $args, true)
+        ? (glob('database/sql/*.sql') ?: [])
+        : array_values(array_filter($args, fn($a) => !str_starts_with($a, '--')));
+
+    if (empty($files)) {
+        echo "Uso: php point db:sql <archivo.sql> [--force] | --all\n";
+        exit(1);
+    }
+    sort($files);
+
+    $pdo = \Core\DB::connection();
+    // Postgres con options='--search_path=esquema': en una base nueva el esquema aún no existe
+    // y _sql_migrations no tendría dónde crearse
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'pgsql') {
+        $schema = trim(explode(',', (string) $pdo->query('SHOW search_path')->fetchColumn())[0], ' "');
+        if ($schema !== '' && !str_starts_with($schema, '$')) {
+            $pdo->exec('CREATE SCHEMA IF NOT EXISTS "' . str_replace('"', '""', $schema) . '"');
+        }
+    }
+    $pdo->exec('CREATE TABLE IF NOT EXISTS _sql_migrations (file text PRIMARY KEY, applied_at timestamptz DEFAULT CURRENT_TIMESTAMP)');
+    $applied = $pdo->query('SELECT file FROM _sql_migrations')->fetchAll(PDO::FETCH_COLUMN);
+
+    $count = 0;
+    foreach ($files as $path) {
+        if (!is_file($path)) {
+            echo "  \033[31mNo existe:\033[0m $path\n";
+            exit(1);
+        }
+        $name = basename($path);
+        if (!$force && in_array($name, $applied, true)) {
+            echo "  [SKIP] $name (ya aplicado)\n";
+            continue;
+        }
+
+        // Archivo completo en una transacción; rollback si falla
+        $pdo->beginTransaction();
+        try {
+            $pdo->exec(file_get_contents($path));
+            $pdo->prepare('DELETE FROM _sql_migrations WHERE file = ?')->execute([$name]);
+            $pdo->prepare('INSERT INTO _sql_migrations (file) VALUES (?)')->execute([$name]);
+            $pdo->commit();
+            echo "  [\033[32mOK\033[0m] $name\n";
+            $count++;
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo "  [\033[31mERROR\033[0m] $name - {$e->getMessage()}\n";
+            exit(1);
+        }
+    }
+
+    echo "  $count archivo(s) aplicado(s).\n";
+}
+
+// ────────────────────────────────────────────────
+// MAKE:JOB
+// ────────────────────────────────────────────────
+
+function createJob(?string $name): void
+{
+    if (!$name) {
+        echo "Uso: php point make:job NombreJob\n";
+        exit(1);
+    }
+
+    $className = ucfirst(preg_replace('/[^a-zA-Z0-9]/', '', $name));
+    if (!str_ends_with($className, 'Job')) {
+        $className .= 'Job';
+    }
+    $filename = "jobs/$className.php";
+
+    if (!is_dir('jobs')) {
+        mkdir('jobs', 0755, true);
+    }
+
+    if (file_exists($filename)) {
+        echo "Ya existe: $filename\n";
+        exit(1);
+    }
+
+    $content = <<<PHP
+<?php
+namespace App\Jobs;
+
+class $className
+{
+    public function handle(array \$data): void
+    {
+        // Logica del job
+    }
+
+    public function failed(array \$data, \\Throwable \$e): void
+    {
+        error_log("$className fallo: " . \$e->getMessage());
+    }
+}
+PHP;
+
+    file_put_contents($filename, "$content\n");
+    echo "Job creado: $filename\n";
+    echo "Uso: dispatch(\\App\\Jobs\\$className::class, ['key' => 'value'])\n";
+}
+
+function createListener(?string $name): void
+{
+    if (!$name) {
+        echo "Uso: php point make:listener NombreListener\n";
+        exit(1);
+    }
+
+    $className = ucfirst(preg_replace('/[^a-zA-Z0-9]/', '', $name));
+    if (!str_ends_with($className, 'Listener')) {
+        $className .= 'Listener';
+    }
+    $filename = "listeners/$className.php";
+
+    if (!is_dir('listeners')) {
+        mkdir('listeners', 0755, true);
+    }
+
+    if (file_exists($filename)) {
+        echo "Ya existe: $filename\n";
+        exit(1);
+    }
+
+    $content = <<<PHP
+<?php
+namespace App\Listeners;
+
+class $className
+{
+    public function handle(array \$payload, string \$event): void
+    {
+        // Logica del listener
+    }
+}
+PHP;
+
+    file_put_contents($filename, "$content\n");
+    echo "Listener creado: $filename\n";
+    echo "Uso: Event::listen('nombre.evento', \\App\\Listeners\\$className::class)\n";
+}
+
+function createTest(?string $name): void
+{
+    $base = strtolower(preg_replace('/[^a-zA-Z0-9_]/', '', (string) $name));
+    $base = preg_replace('/_test$/', '', $base);
+    if ($base === '') {
+        echo "Uso: php point make:test nombre (crea tests/nombre_test.php)\n";
+        exit(1);
+    }
+    $filename = "tests/{$base}_test.php";
+
+    if (!is_dir('tests')) {
+        mkdir('tests', 0755, true);
+    }
+
+    if (file_exists($filename)) {
+        echo "Ya existe: $filename\n";
+        exit(1);
+    }
+
+    $content = <<<'PHP'
+<?php
+
+test('ejemplo: GET /health responde 200', function () {
+    $res = http('GET', '/health');
+    expect($res->status)->toBe(200);
+});
+PHP;
+
+    file_put_contents($filename, "$content\n");
+    echo "Test creado: $filename\n";
+    echo "Ejecutar: php point test $base\n";
+}
+
+// ────────────────────────────────────────────────
+// SCRIBE (delegacion)
+// ────────────────────────────────────────────────
+
+function delegateScribe(string $command, array $args): void
+{
+    $scribe = getcwd() . '/scribe';
+
+    if (!file_exists($scribe)) {
+        echo "Error: no se encontro 'scribe' en el proyecto.\n";
+        exit(1);
+    }
+
+    $parts = array_map('escapeshellarg', array_merge([$scribe, $command], $args));
+    passthru('php ' . implode(' ', $parts), $code);
+    exit($code);
+}
+
+// ────────────────────────────────────────────────
+// PLUGINS
+// ────────────────────────────────────────────────
+
+/** Directorio del framework desde donde se copian los plugins. */
+function frameworkPath(): ?string
+{
+    if (file_exists('.point.json')) {
+        $meta = json_decode(file_get_contents('.point.json'), true);
+        $path = $meta['framework'] ?? null;
+        if ($path && is_dir("$path/plugins")) {
+            return rtrim($path, '/');
+        }
+    }
+
+    // Ejecutando dentro del propio framework
+    if (is_dir(__DIR__ . '/plugins')) {
+        return __DIR__;
+    }
+
+    return null;
+}
+
+function studlyCase(string $value): string
+{
+    return str_replace(' ', '', ucwords(str_replace(['-', '_'], ' ', $value)));
+}
+
+/** Lee la metadata de un plugin desde cualquier directorio, este instalado o no. */
+function pluginMeta(string $dir, string $slug): ?\Core\Plugin
+{
+    if (!is_file("$dir/plugin.php")) {
+        return null;
+    }
+
+    $class = require "$dir/plugin.php";
+
+    if (!is_string($class)) {
+        return null;
+    }
+
+    if (!class_exists($class, false)) {
+        $file = "$dir/src/" . studlyCase($slug) . 'Plugin.php';
+        if (is_file($file)) {
+            require_once $file;
+        }
+    }
+
+    return class_exists($class) ? new $class($slug, $dir) : null;
+}
+
+/** Slugs presentes en un directorio de plugins. */
+function pluginsIn(?string $base): array
+{
+    if (!$base || !is_dir("$base/plugins")) {
+        return [];
+    }
+
+    $found = [];
+    foreach (scandir("$base/plugins") ?: [] as $entry) {
+        if (str_starts_with($entry, '.')) continue;
+        if (is_file("$base/plugins/$entry/plugin.php")) {
+            $found[] = $entry;
+        }
+    }
+    sort($found);
+    return $found;
+}
+
+function pluginsConfigTemplate(): string
+{
+    return "<?php\n\n"
+        . "/**\n"
+        . " * Plugins habilitados. Comenta una linea para desactivar sin borrar archivos.\n"
+        . " *\n"
+        . " *   php point plugin:list        ver instalados y disponibles\n"
+        . " *   php point plugin:add <slug>  instalar y habilitar\n"
+        . " */\n"
+        . "return [\n];\n";
+}
+
+/** Agrega o quita un slug de config/plugins.php conservando el resto del archivo. */
+function togglePluginConfig(string $slug, bool $enable): void
+{
+    $file = 'config/plugins.php';
+
+    if (!file_exists($file)) {
+        if (!is_dir('config')) mkdir('config', 0755, true);
+        file_put_contents($file, pluginsConfigTemplate());
+    }
+
+    $content = file_get_contents($file);
+    $listed = preg_match("/^\s*'" . preg_quote($slug, '/') . "'\s*,?\s*$/m", $content) === 1;
+
+    if ($enable && !$listed) {
+        $content = preg_replace('/\n\];\s*$/', "\n    '$slug',\n];\n", $content, 1);
+    } elseif (!$enable && $listed) {
+        $content = preg_replace("/^\s*'" . preg_quote($slug, '/') . "'\s*,?\s*\n/m", '', $content, 1);
+    }
+
+    file_put_contents($file, $content);
+}
+
+function listPlugins(): void
+{
+    requireProject();
+
+    $active = \Core\PluginManager::all();
+    $installed = \Core\PluginManager::available();
+    $source = frameworkPath();
+    $catalog = ($source && realpath($source) !== realpath(getcwd())) ? pluginsIn($source) : [];
+
+    $all = array_values(array_unique(array_merge($installed, $catalog)));
+    sort($all);
+
+    if (empty($all)) {
+        echo "No hay plugins instalados ni disponibles.\n";
+        return;
+    }
+
+    $width = max(array_map('strlen', $all)) + 2;
+
+    echo "\n  " . str_pad('PLUGIN', $width) . str_pad('ESTADO', 22) . "DESCRIPCION\n";
+    echo '  ' . str_repeat('─', $width + 22 + 45) . "\n";
+
+    foreach ($all as $slug) {
+        if (isset($active[$slug])) {
+            $estado = "\033[32mactivo\033[0m";
+            $pad = 22 - 6;
+            $desc = $active[$slug]->description();
+        } elseif (in_array($slug, $installed, true)) {
+            $estado = "\033[33minstalado\033[0m";
+            $pad = 22 - 9;
+            $meta = pluginMeta(getcwd() . "/plugins/$slug", $slug);
+            $desc = $meta ? $meta->description() : '';
+        } else {
+            $estado = "\033[90mdisponible\033[0m";
+            $pad = 22 - 10;
+            $meta = pluginMeta("$source/plugins/$slug", $slug);
+            $desc = $meta ? $meta->description() : '';
+        }
+
+        echo '  ' . str_pad($slug, $width) . $estado . str_repeat(' ', $pad) . $desc . "\n";
+    }
+
+    echo "\n  \033[32mactivo\033[0m = instalado y habilitado";
+    echo "   \033[33minstalado\033[0m = falta habilitarlo en config/plugins.php";
+    echo "   \033[90mdisponible\033[0m = php point plugin:add <slug>\n\n";
+}
+
+function addPlugin(?string $slug): void
+{
+    if (!$slug) {
+        echo "Uso: php point plugin:add <slug>\n";
+        echo "Ver disponibles: php point plugin:list\n";
+        exit(1);
+    }
+
+    if (!file_exists('vendor/autoload.php')) {
+        echo "Error: Ejecuta 'composer install' primero.\n";
+        exit(1);
+    }
+    require_once 'vendor/autoload.php';
+
+    $source = frameworkPath();
+
+    if (!$source) {
+        echo "No se encontro el framework de origen.\n";
+        echo "Crea .point.json con: {\"framework\": \"/ruta/al/framework\"}\n";
+        exit(1);
+    }
+
+    if (realpath($source) === realpath(getcwd())) {
+        echo "Estas dentro del framework: sus plugins ya viven en plugins/.\n";
+        echo "Habilitalos en config/plugins.php o usa plugin:list.\n";
+        exit(1);
+    }
+
+    $installed = installPluginTree($slug, $source, []);
+
+    if (empty($installed)) {
+        exit(1);
+    }
+
+    echo "\nHabilitado en config/plugins.php: " . implode(', ', $installed) . "\n";
+    echo "Verifica con: php point plugin:list\n";
+}
+
+/** Copia el plugin y sus dependencias. Devuelve los slugs instalados. */
+function installPluginTree(string $slug, string $source, array $seen): array
+{
+    if (in_array($slug, $seen, true)) {
+        return [];
+    }
+    $seen[] = $slug;
+
+    $from = "$source/plugins/$slug";
+
+    if (!is_file("$from/plugin.php")) {
+        echo "El plugin '$slug' no existe en $source/plugins/\n";
+        echo 'Disponibles: ' . implode(', ', pluginsIn($source)) . "\n";
+        return [];
+    }
+
+    $done = [];
+    $meta = pluginMeta($from, $slug);
+
+    foreach ($meta ? $meta->requires() : [] as $dep) {
+        $done = array_merge($done, installPluginTree($dep, $source, $seen));
+    }
+
+    $to = "plugins/$slug";
+
+    if (is_dir($to)) {
+        echo "  ya instalado: $slug\n";
+    } else {
+        copyTree($from, $to);
+        echo "  instalado: $slug" . ($meta && $meta->description() ? ' — ' . $meta->description() : '') . "\n";
+    }
+
+    togglePluginConfig($slug, true);
+    reportPluginExtras($to, $slug);
+
+    return array_merge($done, [$slug]);
+}
+
+/** Avisa de migraciones o variables de entorno que trae el plugin. */
+function reportPluginExtras(string $dir, string $slug): void
+{
+    foreach (glob("$dir/database/*.sql") ?: [] as $sql) {
+        echo "      migracion pendiente: $sql\n";
+    }
+
+    if (is_dir("$dir/endpoints")) {
+        $count = count(glob("$dir/endpoints/*.php") ?: []);
+        if ($count > 0) {
+            echo "      aporta $count endpoint(s) — revisalos con: php point routes\n";
+        }
+    }
+
+    if (is_file("$dir/.env.example")) {
+        echo "      variables de entorno sugeridas en $dir/.env.example\n";
+    }
+}
+
+function removePlugin(array $args): void
+{
+    $slug = $args[0] ?? null;
+    $purge = in_array('--purge', $args, true);
+
+    if (!$slug) {
+        echo "Uso: php point plugin:remove <slug> [--purge]\n";
+        echo "  --purge  ademas de deshabilitarlo, borra plugins/<slug>/\n";
+        exit(1);
+    }
+
+    if (!is_dir("plugins/$slug")) {
+        echo "El plugin '$slug' no esta instalado.\n";
+        exit(1);
+    }
+
+    if (file_exists('vendor/autoload.php')) {
+        require_once 'vendor/autoload.php';
+    }
+
+    // Solo bloquea si un plugin HABILITADO depende de este; si el dependiente
+    // esta instalado pero deshabilitado, basta con avisar.
+    $enabled = enabledPlugins();
+    $dormant = [];
+
+    foreach (pluginsIn(getcwd()) as $other) {
+        if ($other === $slug) continue;
+
+        $meta = pluginMeta(getcwd() . "/plugins/$other", $other);
+        if (!$meta || !in_array($slug, $meta->requires(), true)) {
+            continue;
+        }
+
+        if (in_array($other, $enabled, true)) {
+            echo "No se puede quitar: el plugin '$other' esta habilitado y depende de '$slug'.\n";
+            echo "Quita primero '$other'.\n";
+            exit(1);
+        }
+
+        $dormant[] = $other;
+    }
+
+    togglePluginConfig($slug, false);
+    echo "Deshabilitado en config/plugins.php: $slug\n";
+
+    if ($purge) {
+        removeTree("plugins/$slug");
+        echo "Eliminado: plugins/$slug\n";
+    } else {
+        echo "Los archivos siguen en plugins/$slug (usa --purge para borrarlos).\n";
+    }
+
+    foreach ($dormant as $other) {
+        echo "Aviso: '$other' esta instalado (deshabilitado) y depende de '$slug'.\n";
+    }
+}
+
+/** Slugs habilitados en config/plugins.php. */
+function enabledPlugins(): array
+{
+    if (!file_exists('config/plugins.php')) {
+        return [];
+    }
+
+    $list = require 'config/plugins.php';
+
+    return is_array($list) ? array_values(array_filter($list, 'is_string')) : [];
+}
+
+function removeTree(string $dir): void
+{
+    foreach (scandir($dir) ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..') continue;
+        $path = "$dir/$entry";
+        is_dir($path) ? removeTree($path) : unlink($path);
+    }
+    rmdir($dir);
+}
+
+function createPlugin(?string $name): void
+{
+    if (!$name) {
+        echo "Uso: php point make:plugin nombre-del-plugin\n";
+        exit(1);
+    }
+
+    $slug = strtolower(preg_replace('/[^a-zA-Z0-9\-_]/', '', $name));
+    $studly = str_replace(' ', '', ucwords(str_replace(['-', '_'], ' ', $slug)));
+    $dir = "plugins/$slug";
+
+    if (is_dir($dir)) {
+        echo "Ya existe: $dir\n";
+        exit(1);
+    }
+
+    mkdir("$dir/src", 0755, true);
+
+    file_put_contents("$dir/plugin.php", "<?php\n\nreturn \\Plugins\\{$studly}\\{$studly}Plugin::class;\n");
+
+    $class = <<<PHP
+<?php
+namespace Plugins\\{$studly};
+
+use Core\Plugin;
+
+final class {$studly}Plugin extends Plugin
+{
+    public function description(): string
+    {
+        return '';
+    }
+
+    /** Otros plugins que deben cargarse antes que este. */
+    public function requires(): array
+    {
+        return [];
+    }
+
+    /** Alias de compatibilidad: 'Core\NombreViejo' => NuevaClase::class */
+    public function aliases(): array
+    {
+        return [];
+    }
+
+    /** Bindings, middlewares y listeners. Corre antes de la config de la app. */
+    public function register(): void
+    {
+    }
+
+    /** Configuracion que depende de env u otros plugins. Corre al final del arranque. */
+    public function boot(): void
+    {
+    }
+}
+PHP;
+
+    file_put_contents("$dir/src/{$studly}Plugin.php", "$class\n");
+
+    echo "Plugin creado: $dir\n\n";
+    echo "  $dir/plugin.php              devuelve la clase del plugin\n";
+    echo "  $dir/src/{$studly}Plugin.php\n";
+    echo "  $dir/src/                    autocargado como Plugins\\{$studly}\\...\n";
+    echo "  $dir/helpers.php             (opcional) funciones globales\n";
+    echo "  $dir/endpoints/              (opcional) endpoints propios\n\n";
+    echo "Agrega '$slug' a config/plugins.php para habilitarlo.\n";
+}
+
+// ────────────────────────────────────────────────
+// HELP
+// ────────────────────────────────────────────────
+
+function help(): void
+{
+    echo <<<HELP
+Point Framework CLI
+
+Comandos:
+  init <nombre>                Crear un nuevo proyecto
+  serve [puerto]               Iniciar servidor de desarrollo (default: 8080)
+  routes                       Listar rutas registradas y pipelines
+  cache                        Generar manifiesto de rutas (carga lazy)
+  cache:clear                  Eliminar manifiesto (volver a carga completa)
+  openapi [--serve] [--port=N] Generar openapi.json; --serve lo sirve con Swagger UI (default: 8081)
+  test [filtro]                Ejecutar tests (filtra por nombre o archivo)
+  work [--once]                Iniciar worker de jobs (--once: procesar uno y salir)
+       [--max-jobs=N] [--max-time=S]  Salir tras N jobs o S segundos
+  work:failed                  Listar jobs fallidos
+  work:retry                   Reintentar todos los jobs fallidos
+  work:flush                   Eliminar todos los jobs fallidos
+  db:sql <archivo> [--force]   Aplicar SQL crudo en una transaccion (--all: database/sql/*.sql pendientes)
+  make:migration <tabla> [t]   Crear migracion (t: create|alter, default: create)
+  make:seed <tabla>            Crear seed
+  migrate                      Ejecutar migraciones pendientes
+  rollback                     Deshacer ultima migracion
+  seed                         Ejecutar seeds pendientes
+  plugin:list                  Listar plugins instalados y disponibles
+  plugin:add <slug>            Instalar un plugin (con sus dependencias)
+  plugin:remove <slug>         Deshabilitar un plugin (--purge borra archivos)
+  make:endpoint <ruta> [opts]  Crear un nuevo endpoint
+  make:middleware <nombre>     Crear un nuevo middleware
+  make:service <nombre>        Crear un nuevo service
+  make:job <nombre>            Crear un nuevo job
+  make:listener <nombre>       Crear un nuevo listener
+  make:test <nombre>           Crear tests/<nombre>_test.php
+  make:plugin <nombre>         Crear un nuevo plugin
+
+Opciones de make:endpoint:
+  --post, --put, --patch, --delete   Metodo HTTP (default: GET)
+  --group=nombre                     Grupo de middleware (default: protected)
+  --public                           Atajo para --group=public
+
+Ejemplos:
+  php point init mi-api
+  php point serve 3000
+  php point routes
+  php point make:endpoint users/list --get --group=admin_area
+  php point make:endpoint users/create --post --group=protected
+  php point make:endpoint users/:id --get
+  php point make:middleware Auth
+  php point make:service User
+  php point make:job SendWelcomeEmail
+  php point make:listener LogUserCreated
+  php point make:test users
+  php point plugin:list
+  php point plugin:add ai
+  php point plugin:remove ai --purge
+  php point make:plugin notificaciones
+
+HELP;
+}

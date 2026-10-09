@@ -1,0 +1,50 @@
+#!/usr/bin/env php
+<?php
+
+use Plugins\Scheduler\Scheduler;
+
+// Sin rutas: el scheduler no atiende peticiones HTTP
+define('POINT_NO_ROUTES', true);
+define('POINT_NO_MANIFEST', true);
+
+require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/bootstrap.php';
+
+if (!Core\PluginManager::has('scheduler')) {
+    echo "El plugin 'scheduler' no esta habilitado en config/plugins.php\n";
+    exit(1);
+}
+
+$command = $argv[1] ?? 'run';
+
+switch ($command) {
+    case 'run':
+        $results = Scheduler::run();
+        if (empty($results)) {
+            echo "No tasks due.\n";
+            break;
+        }
+        foreach ($results as $r) {
+            $icon = $r['status'] === 'ok' ? 'OK' : ($r['status'] === 'skipped' ? 'SKIP' : 'ERR');
+            echo "[{$icon}] {$r['task']}";
+            if (isset($r['error'])) echo " - {$r['error']}";
+            echo "\n";
+        }
+        break;
+
+    case 'list':
+        $tasks = Scheduler::all();
+        if (empty($tasks)) {
+            echo "No scheduled tasks.\n";
+            break;
+        }
+        echo str_pad('Expression', 20) . "Task\n";
+        echo str_repeat('-', 60) . "\n";
+        foreach ($tasks as $task) {
+            echo str_pad($task->getExpression(), 20) . $task->getDescription() . "\n";
+        }
+        break;
+
+    default:
+        echo "Usage: php scheduler [run|list]\n";
+}

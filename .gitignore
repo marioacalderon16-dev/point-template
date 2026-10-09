@@ -1,0 +1,15 @@
+/vendor/
+node_modules/
+/cache/
+/storage/cache/*
+/storage/locks/*
+/storage/logs/*
+/storage/ratelimit/*
+/storage/jobs/*
+!/storage/**/.gitkeep
+.env
+.env.*
+!.env.example
+.DS_Store
+/supabase/.temp/
+*.sqlite

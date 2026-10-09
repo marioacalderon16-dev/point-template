@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php-version: ['8.4', '8.5']
+
+    # Postgres desechable por ejecución: los tests nunca tocan la base de desarrollo ni la de producción
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: app_test
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U app -d app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Las variables del proceso tienen prioridad sobre .env (que en CI no existe)
+    env:
+      DB_DSN: pgsql:host=127.0.0.1;port=5432;dbname=app_test
+      DB_USER: app
+      DB_PASS: app
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: pdo_sqlite, pdo_pgsql, pcntl
+
+      - run: composer install --no-interaction --prefer-dist
+
+      - run: composer audit --no-interaction
+
+      - run: composer stan
+
+      - run: php point migrate
+
+      - run: php point test
