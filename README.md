@@ -36,9 +36,31 @@ Endpoint::from(__FILE__)
 
 ## Requisitos
 
-- PHP 8.4 o superior con `pdo_pgsql` (o `pdo_mysql`)
-- [Composer](https://getcomposer.org/)
-- Una base de datos Postgres o MySQL (local o en la nube)
+Lo único obligatorio:
+
+- PHP 8.4 o superior y [Composer](https://getcomposer.org/)
+- Una base de datos **Postgres o MySQL/MariaDB**, la que sea (local o en la nube)
+
+Se puede usar libremente en cualquier proyecto, también comercial (licencia [MIT](LICENSE)).
+
+### Todo lo demás es opcional
+
+La guía usa algunos servicios como ejemplo, pero ninguno es necesario:
+
+| Sugerencia | Sin ella… |
+|---|---|
+| Neon / Supabase | Cualquier otro Postgres o MySQL, local o en la nube |
+| Railway | Cualquier plataforma con Docker o un hosting PHP tradicional. Las migraciones y el cron del scheduler se configuran a mano ([ver guía](docs/GUIA_INICIO.md#sin-railway-supabase-ni-neon)) |
+| GitHub + CI | Funciona igual; solo se pierde la ejecución automática de tests en cada push |
+| `.env.testing` | Los tests usan la base de desarrollo (con un aviso) |
+
+### Límites
+
+- Pensado para **APIs REST**; no es para webs con plantillas HTML.
+- **SQLite no está soportado.**
+- El login no viene hecho: se construye siguiendo la guía (paso 13).
+- Antes de subir a una versión futura de PHP (8.6+), comprueba que no haya avisos de
+  obsolescencia: el manejador de errores los convierte en HTTP 500. El CI lo detecta.
 
 ## Inicio rápido
 
