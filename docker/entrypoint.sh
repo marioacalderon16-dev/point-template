@@ -10,9 +10,10 @@ PORT="${PORT:-8080}"
 sed -i "s/^Listen .*/Listen ${PORT}/" /etc/apache2/ports.conf
 sed -i "s/<VirtualHost \*:[0-9]*>/<VirtualHost *:${PORT}>/" /etc/apache2/sites-available/000-default.conf
 
-# storage/ puede ser un volumen montado (vacío y de root): crear sus carpetas y dárselas a Apache
-mkdir -p /var/www/html/storage/logs /var/www/html/storage/cache /var/www/html/storage/jobs/failed /var/www/html/storage/uploads
-chown -R www-data:www-data /var/www/html/storage
+# storage/ puede ser un volumen montado (vacío y de root): crear sus carpetas y dárselas a Apache.
+# "|| true": en plataformas que arrancan el contenedor sin root, esto no debe impedir el arranque
+mkdir -p /var/www/html/storage/logs /var/www/html/storage/cache /var/www/html/storage/jobs/failed /var/www/html/storage/uploads || true
+chown -R www-data:www-data /var/www/html/storage || true
 
 # Worker de la cola (jobs, eventos con fireAsync y rutas ->asyncable()) con WORKER_ENABLED=true.
 # La cola y la caché son archivos de storage/: el worker tiene que correr en ESTE contenedor, no en otro

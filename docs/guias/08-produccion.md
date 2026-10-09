@@ -121,6 +121,8 @@ CORS_ORIGINS=https://tu-frontend.com
    desplegar; cuando el servicio está en verde, `/health` respondió.
 4. **Un volumen para `storage/`.** Servicio → **Settings → Volumes → Add Volume**, con la ruta
    `/var/www/html/storage`. Sin él, los adjuntos, la cola y la caché se pierden en cada despliegue.
+   Al arrancar, el contenedor da los permisos de esa carpeta a Apache. En plataformas que ejecutan el
+   contenedor sin permisos de administrador, configura los permisos del volumen en la propia plataforma.
 
 **Migraciones automáticas.** `railway.json` ejecuta `php /var/www/html/scribe migrate` **antes** de
 arrancar cada versión nueva. Si una migración falla, el despliegue se detiene y sigue funcionando la
