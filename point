@@ -190,34 +190,10 @@ function init(?string $name): void
     copy("$source/composer.lock", "$name/composer.lock");
     copy("$source/phpstan.neon", "$name/phpstan.neon");
 
-    $middlewareConfig = <<<'PHP'
-<?php
-
-return [
-
-    'individual' => [
-        'cors'       => [\Core\Middleware\CorsMiddleware::class, 'handle'],
-        'auth'       => [\Core\Middleware\AuthMiddleware::class, 'handle'],
-        'rate_limit' => [\Core\Middleware\RateLimitMiddleware::class, 'handle'],
-        'logger'     => [\Core\Middleware\LoggerMiddleware::class, 'handle'],
-        'security'   => [\Core\Middleware\SecurityHeadersMiddleware::class, 'handle'],
-    ],
-
-    'global' => [
-        'cors',
-        'security',
-    ],
-
-    'groups' => [
-        'protected' => ['auth'],
-        'admin'     => ['auth:admin'],
-    ],
-
-    'inline' => [],
-
-];
-PHP;
-    file_put_contents("$name/config/middleware.php", "$middlewareConfig\n");
+    // Misma config que la plantilla: grupos public/protected/authenticated/admin/staff
+    copy("$source/config/middleware.php", "$name/config/middleware.php");
+    // Reglas de validación reutilizables (Rules::custom() se registra en bootstrap.php)
+    copy("$source/services/Rules.php", "$name/services/Rules.php");
 
     $servicesConfig = <<<'PHP'
 <?php

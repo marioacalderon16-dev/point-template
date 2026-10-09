@@ -76,6 +76,22 @@ final class Rules
         ];
     }
 
+    /**
+     * Reglas propias, usables por nombre en cualquier endpoint ('required|slug').
+     * bootstrap.php las registra al arrancar. Formato: nombre => [comprobación, mensaje].
+     * La comprobación recibe ($value, ?string $param, array $input) y devuelve true si es válido.
+     * @return array<string, array{0: callable, 1: string}>
+     */
+    public static function custom(): array
+    {
+        return [
+            'slug' => [
+                fn ($value) => is_string($value) && preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/', $value) === 1,
+                'El campo :field solo admite minúsculas, números y guiones.',
+            ],
+        ];
+    }
+
     private static function presence(bool $required): string
     {
         return $required ? 'required' : 'optional';

@@ -82,6 +82,11 @@ foreach ($middlewareConfig['groups'] ?? [] as $group => $middlewares) {
     }
 }
 
+// Reglas de validación propias, definidas en services/Rules.php (Rules::custom())
+if (class_exists(\App\Services\Rules::class) && method_exists(\App\Services\Rules::class, 'custom')) {
+    \Core\Validator::extendMany(\App\Services\Rules::custom());
+}
+
 // Registrar bindings explícitos de services
 $servicesConfig = __DIR__ . '/config/services.php';
 if (file_exists($servicesConfig)) {

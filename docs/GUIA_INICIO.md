@@ -17,7 +17,8 @@ php point init ../mi-api
 ```
 
 Copia el core, `composer.json`/`composer.lock`, Docker (`Dockerfile`, `.dockerignore`), `railway.json`, `public/`, el endpoint
-`/health`, el scheduler y los plugins `health` y `scheduler`. Genera además un `.env` con un
+`/health`, el scheduler, los plugins `health` y `scheduler`, `config/middleware.php` y
+`services/Rules.php`. Genera además un `.env` con un
 `JWT_SECRET` aleatorio.
 
 ## Paso 2: instalar dependencias
@@ -264,6 +265,33 @@ use App\Services\Rules;
 
 `Rules::status()` lanza una excepción si la lista está vacía o si algún valor contiene una coma.
 
+**Reglas propias.** Se definen en `Rules::custom()` y `bootstrap.php` las registra al arrancar, así que
+se pueden usar por nombre en cualquier endpoint (`'slug' => 'required|slug'`):
+
+```php
+public static function custom(): array
+{
+    return [
+        'slug' => [fn ($value) => is_string($value) && preg_match('/^[a-z0-9]+(?:-[a-z0-9]+)*$/', $value) === 1,
+                   'El campo :field solo admite minúsculas, números y guiones.'],
+        // 'nombre' => [fn ($value, $param, $input) => ..., 'mensaje con :field'],
+    ];
+}
+```
+
+**Comparar campos.** `gt`, `gte`, `lt` y `lte` comparan números; `after`, `after_or_equal`, `before`
+y `before_or_equal` comparan fechas. El parámetro es otro campo o un valor literal:
+
+```php
+'from' => Rules::date(),
+'to'   => [...Rules::date(), 'after_or_equal:from'],   // "to" no puede ser anterior a "from"
+'max'  => 'optional|integer|gte:min',
+'end'  => 'required|date|before:2030-01-01',
+```
+
+**Erratas.** Una regla que no existe (`'required|emial'`) provoca un error 500 la primera vez que
+se llama al endpoint, en lugar de dejar el campo sin validar.
+
 ## Paso 10: tests automáticos
 
 ```bash
@@ -352,6 +380,9 @@ $token = Core\Auth::issue(['sub' => $user['id'], 'role' => $user['role']]);
 // en el endpoint
 ->group('staff')   // sin token: 401 · rol no permitido: 403 · admin o editor: pasa
 ```
+
+Un usuario con varios roles usa el claim `roles` (lista); basta con que uno esté permitido:
+`Core\Auth::issue(['sub' => 7, 'roles' => ['editor', 'billing']])`.
 
 ```bash
 php point make:endpoint me

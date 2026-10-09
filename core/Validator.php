@@ -11,6 +11,40 @@ class Validator
     private $validated = [];
     private $strict = false;
 
+    /** @var array<string, array{0: callable, 1: string}> Reglas propias: nombre => [comprobación, mensaje] */
+    private static array $custom = [];
+
+    private const BUILTIN = [
+        'trim', 'lowercase', 'uppercase', 'strip_tags', 'required', 'optional', 'string', 'integer',
+        'numeric', 'boolean', 'array', 'email', 'min', 'max', 'in', 'not_in', 'list_in', 'source',
+        'date', 'unique', 'exists', 'url', 'uuid', 'ip', 'alpha_num', 'regex', 'json', 'between',
+        'confirmed', 'each', 'file', 'max_size', 'mime', 'default',
+        'gt', 'gte', 'lt', 'lte', 'after', 'after_or_equal', 'before', 'before_or_equal',
+    ];
+
+    /**
+     * Registra una regla propia. $check recibe ($value, ?string $param, array $input) y devuelve
+     * true si el valor es válido. ':field' en el mensaje se sustituye por el nombre del campo.
+     */
+    public static function extend(string $name, callable $check, string $message = 'El campo :field no es válido.'): void
+    {
+        if (in_array($name, self::BUILTIN, true)) {
+            throw new \InvalidArgumentException("Validator::extend: '{$name}' es una regla nativa y no se puede redefinir.");
+        }
+        if (!preg_match('/^[a-z][a-z0-9_]*$/', $name)) {
+            throw new \InvalidArgumentException("Validator::extend: nombre de regla inválido '{$name}'.");
+        }
+        self::$custom[$name] = [$check, $message];
+    }
+
+    /** @param array<string, array{0: callable, 1?: string}> $rules nombre => [comprobación, mensaje opcional] */
+    public static function extendMany(array $rules): void
+    {
+        foreach ($rules as $name => $definition) {
+            self::extend($name, $definition[0], $definition[1] ?? 'El campo :field no es válido.');
+        }
+    }
+
     public function __construct(array $input, array $rules, array $sources = [], bool $strict = false)
     {
         $this->input = $input;
@@ -424,11 +458,89 @@ class Validator
                     $value = $this->parseDefaultValue($param);
                 }
                 break;
-            default:
-                if (ErrorHandler::isDevelopment()) {
-                    error_log("Regla no soportada: '$rule' para '$field'");
+            case 'gt':
+            case 'gte':
+            case 'lt':
+            case 'lte':
+                if ($param !== null && $value !== null) {
+                    $this->compareNumbers($field, $value, $rule, $param);
                 }
                 break;
+            case 'after':
+            case 'after_or_equal':
+            case 'before':
+            case 'before_or_equal':
+                if ($param !== null && $value !== null) {
+                    $this->compareDates($field, $value, $rule, $param);
+                }
+                break;
+            default:
+                if (!isset(self::$custom[$rule])) {
+                    // Falla cerrado: una errata en una regla no puede desactivar la validación
+                    throw new \InvalidArgumentException("Regla de validación desconocida: '{$rule}' en el campo '{$field}'.");
+                }
+                [$check, $message] = self::$custom[$rule];
+                if ($value !== null && $check($value, $param, $this->input) !== true) {
+                    $this->addError($field, str_replace(':field', $field, $message));
+                }
+                break;
+        }
+    }
+
+    /** Valor con el que se compara: otro campo (ya validado si lo está) o un literal. */
+    private function comparisonTarget(string $param)
+    {
+        if (array_key_exists($param, $this->input)) {
+            return $this->validated[$param] ?? $this->input[$param];
+        }
+        return $param;
+    }
+
+    private function compareNumbers(string $field, $value, string $rule, string $param): void
+    {
+        if (!is_numeric($value)) {
+            $this->addError($field, "El campo {$field} debe ser un número.");
+            return;
+        }
+        $target = $this->comparisonTarget($param);
+        if (!is_numeric($target)) {
+            return; // el otro campo ausente o inválido ya se reporta en su propia validación
+        }
+        $a = (float) $value;
+        $b = (float) $target;
+        $ok = match ($rule) {
+            'gt' => $a > $b,
+            'gte' => $a >= $b,
+            'lt' => $a < $b,
+            default => $a <= $b,
+        };
+        if (!$ok) {
+            $op = ['gt' => 'mayor que', 'gte' => 'mayor o igual que', 'lt' => 'menor que', 'lte' => 'menor o igual que'][$rule];
+            $this->addError($field, "El campo {$field} debe ser {$op} {$param}.");
+        }
+    }
+
+    private function compareDates(string $field, $value, string $rule, string $param): void
+    {
+        $a = is_string($value) ? strtotime($value) : false;
+        if ($a === false) {
+            $this->addError($field, "El campo {$field} debe ser una fecha válida.");
+            return;
+        }
+        $target = $this->comparisonTarget($param);
+        $b = is_string($target) ? strtotime($target) : false;
+        if ($b === false) {
+            return;
+        }
+        $ok = match ($rule) {
+            'after' => $a > $b,
+            'after_or_equal' => $a >= $b,
+            'before' => $a < $b,
+            default => $a <= $b,
+        };
+        if (!$ok) {
+            $op = ['after' => 'posterior a', 'after_or_equal' => 'igual o posterior a', 'before' => 'anterior a', 'before_or_equal' => 'igual o anterior a'][$rule];
+            $this->addError($field, "El campo {$field} debe ser una fecha {$op} {$param}.");
         }
     }
 
