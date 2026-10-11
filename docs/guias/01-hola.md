@@ -67,6 +67,10 @@ php point make:endpoint hola --public
 `--public` significa que cualquiera puede llamarlo, sin iniciar sesión (sin él, Point lo protegería con
 token, que veremos en la guía 3).
 
+> **Truco:** añade `--open` y Point abre el archivo recién creado en tu editor:
+> `php point make:endpoint hola --public --open`. Para elegir el editor, pon en `.env` una línea como
+> `POINT_EDITOR=code` (VS Code), `POINT_EDITOR=phpstorm` o `POINT_EDITOR=vim`.
+
 Abre `endpoints/hola.php` y reemplaza su contenido por:
 
 ```php file=endpoints/hola.php

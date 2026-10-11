@@ -30,6 +30,10 @@ php point make:endpoint posts/update --put      # crea endpoints/posts/update.ph
 Opciones: `--post`, `--put`, `--patch` o `--delete` (por defecto GET); `--group=nombre` (por defecto `protected`);
 `--public` (atajo de `--group=public`). Un segmento `:id` se convierte en `{id}`: `make:endpoint posts/:id`.
 
+Con `--open`, cualquier `make:*` abre el archivo recién creado en tu editor: `php point make:endpoint posts/update --put --open`.
+El editor sale de `POINT_EDITOR` (variable de entorno o línea en `.env`, p. ej. `POINT_EDITOR=code`), después de `VISUAL`
+o `EDITOR`; si no hay ninguno, usa VS Code si está instalado o la aplicación por defecto del sistema.
+
 ### Estructura
 
 ```php
@@ -525,7 +529,7 @@ Desde Swagger se prueban los endpoints con «Try it out». Para las rutas proteg
 | `logs [--level] [--grep] [-f]` | Logs con colores; `-f` en vivo |
 | `openapi [--serve]` | Documentación OpenAPI / Swagger UI |
 | `test [filtro\|--smoke[=all]]` | Ejecuta los tests, o la prueba de humo |
-| `make:endpoint <ruta> [opciones]` | Crea un endpoint |
+| `make:endpoint <ruta> [opciones]` | Crea un endpoint (`--open` lo abre en el editor, igual que en el resto de `make:*`) |
 | `make:action <Nombre>` | Crea una acción (lógica reutilizable) |
 | `make:http [--force] [--output=archivo]` | Genera `requests.http` |
 | `make:test <nombre>` | Crea `tests/<nombre>_test.php` |

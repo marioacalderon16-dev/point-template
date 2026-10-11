@@ -647,6 +647,37 @@ function rulesToSchema(array $rules): array
 // MAKE:ENDPOINT
 // ────────────────────────────────────────────────
 
+/**
+ * Con --open, abre el archivo recién creado en el editor. Orden: POINT_EDITOR (del entorno o de .env),
+ * VISUAL o EDITOR (p. ej. "code", "phpstorm", "vim"); si no hay ninguno, VS Code si está instalado o la
+ * aplicación por defecto del sistema.
+ */
+function openIfRequested(string $path): void
+{
+    global $argv;
+    if (!in_array('--open', $argv ?? [], true)) {
+        return;
+    }
+    $editor = (string) (getenv('POINT_EDITOR') ?: '');
+    if ($editor === '' && is_file('.env') && preg_match('/^POINT_EDITOR=["\']?([^"\'\r\n]+)/m', (string) file_get_contents('.env'), $m)) {
+        $editor = trim($m[1]);
+    }
+    $editor = $editor ?: (string) (getenv('VISUAL') ?: getenv('EDITOR') ?: '');
+    if ($editor === '') {
+        $editor = match (true) {
+            trim((string) shell_exec('command -v code 2>/dev/null')) !== '' => 'code',
+            PHP_OS_FAMILY === 'Darwin' => 'open',
+            PHP_OS_FAMILY === 'Windows' => 'start ""',
+            default => 'xdg-open',
+        };
+    }
+    echo "Abriendo con $editor: $path\n";
+    passthru($editor . ' ' . escapeshellarg($path), $code);
+    if ($code !== 0) {
+        echo "No se pudo abrir con '$editor'. Define POINT_EDITOR (p. ej. POINT_EDITOR=code en .env).\n";
+    }
+}
+
 function createEndpoint(array $args): void
 {
     if (empty($args)) {
@@ -678,6 +709,8 @@ function createEndpoint(array $args): void
             $group = substr($arg, 8);
         } elseif ($arg === '--public') {
             $group = 'public';
+        } elseif ($arg === '--open') {
+            // se atiende al final, con el archivo ya creado
         } elseif (isset($methodMap[$arg])) {
             $httpMethod = $methodMap[$arg];
         } else {
@@ -751,6 +784,7 @@ PHP;
 
     file_put_contents($fullPath, "$content\n");
     echo "Endpoint creado: $fullPath ($httpMethod $routePath) grupo '$group'\n";
+    openIfRequested($fullPath);
 }
 
 // ────────────────────────────────────────────────
@@ -795,6 +829,7 @@ PHP;
 
     file_put_contents($filename, "$content\n");
     echo "Middleware creado: $filename\n";
+    openIfRequested($filename);
     echo "Registralo en config/middleware.php:\n";
     echo "  '$name' => [\\App\\Middlewares\\$className::class, 'handle'],\n";
 }
@@ -859,6 +894,7 @@ PHP;
 
     file_put_contents($filename, "$content\n");
     echo "Acción creada: $filename\n";
+    openIfRequested($filename);
 }
 
 /** Valor de ejemplo para un campo según sus reglas (requests.http). */
@@ -1021,6 +1057,7 @@ PHP;
 
     file_put_contents($filename, "$content\n");
     echo "Service creado: $filename\n";
+    openIfRequested($filename);
 }
 
 // ────────────────────────────────────────────────
@@ -1767,6 +1804,7 @@ PHP;
 
     file_put_contents($filename, "$content\n");
     echo "Job creado: $filename\n";
+    openIfRequested($filename);
     echo "Uso: dispatch(\\App\\Jobs\\$className::class, ['key' => 'value'])\n";
 }
 
@@ -1807,6 +1845,7 @@ PHP;
 
     file_put_contents($filename, "$content\n");
     echo "Listener creado: $filename\n";
+    openIfRequested($filename);
     echo "Uso: Event::listen('nombre.evento', \\App\\Listeners\\$className::class)\n";
 }
 
@@ -1840,6 +1879,7 @@ PHP;
 
     file_put_contents($filename, "$content\n");
     echo "Test creado: $filename\n";
+    openIfRequested($filename);
     echo "Ejecutar: php point test $base\n";
 }
 
@@ -2245,6 +2285,7 @@ PHP;
     file_put_contents("$dir/src/{$studly}Plugin.php", "$class\n");
 
     echo "Plugin creado: $dir\n\n";
+    openIfRequested("$dir/src/{$studly}Plugin.php");
     echo "  $dir/plugin.php              devuelve la clase del plugin\n";
     echo "  $dir/src/{$studly}Plugin.php\n";
     echo "  $dir/src/                    autocargado como Plugins\\{$studly}\\...\n";
@@ -2287,7 +2328,7 @@ Comandos:
   plugin:list                  Listar plugins instalados y disponibles
   plugin:add <slug>            Instalar un plugin (con sus dependencias)
   plugin:remove <slug>         Deshabilitar un plugin (--purge borra archivos)
-  make:endpoint <ruta> [opts]  Crear un nuevo endpoint
+  make:endpoint <ruta> [opts]  Crear un nuevo endpoint (todos los make:* aceptan --open para abrir el archivo creado)
   make:middleware <nombre>     Crear un nuevo middleware
   make:service <nombre>        Crear un nuevo service
   make:action <Nombre>         Crear services/Actions/<Nombre>.php (lógica reutilizable, sin HTTP)
@@ -2301,6 +2342,7 @@ Opciones de make:endpoint:
   --post, --put, --patch, --delete   Metodo HTTP (default: GET)
   --group=nombre                     Grupo de middleware (default: protected)
   --public                           Atajo para --group=public
+  --open                             Abrir el archivo creado (POINT_EDITOR, VISUAL, EDITOR, VS Code o el del sistema)
 
 Ejemplos:
   php point init mi-api
