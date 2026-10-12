@@ -31,7 +31,7 @@ en la guía 3).
 ## Paso 2: instalar las dependencias
 
 ```bash
-cd ../tareas
+cd ../tareas          # debes estar DENTRO de la carpeta tareas, no en la plantilla ni en la carpeta que la contiene
 composer install
 ```
 

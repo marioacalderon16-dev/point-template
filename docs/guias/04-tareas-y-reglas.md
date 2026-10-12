@@ -84,7 +84,8 @@ open ──► in_progress ──► done
 
 Point trae muchas reglas (`email`, `min`, `date`…), pero algunas son de tu negocio. Supongamos que
 **las entregas no pueden caer en sábado ni domingo**. Las reglas propias se añaden en el método
-`custom()` de `services/Rules.php`. Reemplaza ese método por:
+`custom()` de `services/Rules.php`. Ese método **ya existe** con la regla `slug`: no crees otro. Añade
+`workday` dentro del array que devuelve, junto a `slug`. Así queda el método completo:
 
 ```php file=services/Rules.php method=custom
     public static function custom(): array

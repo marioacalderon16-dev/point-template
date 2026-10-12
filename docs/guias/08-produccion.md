@@ -26,6 +26,9 @@ git status --short          # .env no debe aparecer
 php point routes            # revisa la columna ACCESS: ¿alguna ruta "public" que no debería serlo?
 ```
 
+Si una ruta `public` expone datos que no deberían verse sin sesión (por ejemplo, la lista de proyectos),
+cámbiala a `->group('protected')` antes de publicar.
+
 En producción, **algunas variables cambian** (las pondremos en la plataforma, nunca en el repositorio):
 
 | Variable | En producción | Por qué |
@@ -188,6 +191,12 @@ DigitalOcean…): solo cambian `DB_DSN`, `DB_USER` y `DB_PASS`.
 
 Con `point mcp`, un asistente como Claude puede usar los endpoints que tú elijas. Basta con marcarlos con
 `->mcp('descripción')`: la descripción le explica **cuándo** usarlo, y los campos salen de `expects`.
+
+Un endpoint sin `->mcp()` no aparece en la lista de herramientas: si `point mcp` no muestra nada, falta esa línea.
+
+> **Alcance:** `point mcp` es para **tu uso como desarrollador**, con tu código y tu base de desarrollo. No
+> da IA a los usuarios de una API desplegada: eso exigiría un servidor MCP remoto que autentique a cada
+> usuario con su propio token, algo que Point no incluye en esta versión.
 
 Marca el panel:
 

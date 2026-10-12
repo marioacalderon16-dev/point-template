@@ -180,7 +180,8 @@ return Table::create('labels')
 php point migrate
 ```
 
-Crea `endpoints/labels.php` (a mano, no hace falta `make:endpoint`):
+Crea `endpoints/labels.php` a mano, sin `make:endpoint`. Si ejecutaste `php point make:endpoint labels` por
+error, el archivo que generó es una plantilla que no define el recurso: **reemplaza todo su contenido** por el código de abajo.
 
 ```php file=endpoints/labels.php
 <?php

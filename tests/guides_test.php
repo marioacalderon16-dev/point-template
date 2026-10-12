@@ -317,7 +317,7 @@ test('guías: el proyecto Tareas funciona siguiendo los pasos en orden', functio
                 expect($log())->toContain('marta@example.com');
 
                 (new PDO($dsn, $db[1], $db[2]))->exec("UPDATE tasks SET due_date = '2020-01-06', status = 'open' WHERE id = $t");
-                $dispatch = 'php -r ' . escapeshellarg('define("POINT_NO_ROUTES", 1); require "vendor/autoload.php"; require "bootstrap.php"; dispatch(App\Jobs\RemindOverdueTasks::class);');
+                $dispatch = 'php -r ' . escapeshellarg('define("POINT_NO_ROUTES", 1); require "vendor/autoload.php"; require "bootstrap.php"; dispatch(App\Jobs\RemindOverdueTasksJob::class);');
                 expect(guideExec($app, $db, $dispatch)[1])->toBe(0);
                 expect(guidePoint($app, $db, 'work --once')[1])->toBe(0);
                 expect($log())->toContain('recordatorio.tarea_vencida');

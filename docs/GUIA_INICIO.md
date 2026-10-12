@@ -18,6 +18,9 @@ concreta, usa la [referencia](REFERENCIA_ENDPOINT.md).
 **Necesitas:** PHP 8.4 o superior, [Composer](https://getcomposer.org/), git y (desde la guía 2) una
 base de datos Postgres o MySQL.
 
+**Puertos:** los ejemplos usan el 8090. Si ese puerto ya lo usa otro programa (`Address already in use`),
+arranca con otro (`php point serve 8091`) y usa ese mismo número en los `curl`.
+
 ---
 
 **¿Cómo están verificadas?** Un test del repositorio sigue las ocho guías en orden sobre un proyecto

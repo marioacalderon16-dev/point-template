@@ -152,14 +152,16 @@ Después, el listener que avisa:
 php point make:listener NotifyProjectOwner
 ```
 
-```php file=listeners/NotifyProjectOwner.php
+El generador añade el sufijo `Listener`: el archivo es `listeners/NotifyProjectOwnerListener.php` y la clase debe llamarse igual. Reemplaza su contenido por:
+
+```php file=listeners/NotifyProjectOwnerListener.php
 <?php
 namespace App\Listeners;
 
 use Core\DB;
 use Core\Log;
 
-class NotifyProjectOwner
+class NotifyProjectOwnerListener
 {
     public function handle(array $payload, string $event): void
     {
@@ -186,15 +188,17 @@ Por último, se conecta el evento con su listener en `config/events.php` (créal
 
 return [
     'task.created' => [
-        App\Listeners\NotifyProjectOwner::class,
+        App\Listeners\NotifyProjectOwnerListener::class,
     ],
 ];
 ```
 
-Crea una tarea y mira el log:
+El proyecto 1 del seed no tiene dueño, así que el listener no avisa a nadie. Crea un proyecto tuyo,
+anota su `id` (sustituye `ID` abajo) y crea una tarea en él:
 
 ```bash
-php point call tasks.create project_id=1 title="Revisar textos" --as=1
+php point call projects.create name="Demo avisos" --as=1 --data
+php point call tasks.create project_id=ID title="Revisar textos" --as=1
 php point logs --grep=aviso --lines=1
 ```
 
@@ -211,14 +215,16 @@ y lo procesa el **worker**, un proceso aparte.
 php point make:job RemindOverdueTasks
 ```
 
-```php file=jobs/RemindOverdueTasks.php
+Igual que con los listeners, el generador añade el sufijo `Job`: el archivo es `jobs/RemindOverdueTasksJob.php`. Reemplaza su contenido por:
+
+```php file=jobs/RemindOverdueTasksJob.php
 <?php
 namespace App\Jobs;
 
 use Core\DB;
 use Core\Log;
 
-class RemindOverdueTasks
+class RemindOverdueTasksJob
 {
     public function handle(array $data): void
     {
@@ -251,7 +257,7 @@ UPDATE tasks SET due_date = '2020-01-06', status = 'open' WHERE id = 1;
 Ahora encola el job y procésalo con el worker:
 
 ```bash
-php -r 'define("POINT_NO_ROUTES", 1); require "vendor/autoload.php"; require "bootstrap.php"; dispatch(App\Jobs\RemindOverdueTasks::class);'
+php -r 'define("POINT_NO_ROUTES", 1); require "vendor/autoload.php"; require "bootstrap.php"; dispatch(App\Jobs\RemindOverdueTasksJob::class);'
 php point work --once                        # procesa un job y termina
 php point logs --grep=recordatorio --lines=5
 ```
@@ -269,7 +275,7 @@ declaran en `config/schedule.php`; reemplázalo por:
 ```php file=config/schedule.php
 <?php
 
-use App\Jobs\RemindOverdueTasks;
+use App\Jobs\RemindOverdueTasksJob;
 use Core\Middleware\RateLimitMiddleware;
 use Plugins\Scheduler\Scheduler;
 
@@ -282,7 +288,7 @@ Scheduler::call(fn () => RateLimitMiddleware::purgeExpired())
     ->description('Limpiar contadores de rate limit vencidos');
 
 // Recordatorio de tareas vencidas, cada día a las 8:00
-Scheduler::job(RemindOverdueTasks::class)
+Scheduler::job(RemindOverdueTasksJob::class)
     ->dailyAt('08:00')
     ->description('Recordar tareas vencidas');
 ```
@@ -344,6 +350,8 @@ Sin la cabecera, funciona como siempre (espera y responde). **Con** `Prefer: res
 ```bash
 curl -s -X POST http://localhost:8090/projects/1/export -H "Authorization: Bearer TU_TOKEN" -H "Prefer: respond-async"
 ```
+
+Con `QUEUE_SYNC=true` en `.env` (el valor de desarrollo), el job se ejecuta al momento y el ticket ya sale en `done`. Con `QUEUE_SYNC=false` (como en producción), sale en `queued` hasta que el worker lo procesa:
 
 ```json
 { "status": 202, "job": "7f3a9c…", "state": "queued", "status_url": "/jobs/7f3a9c…" }

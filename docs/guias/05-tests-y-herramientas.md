@@ -23,7 +23,8 @@ Los tests crean usuarios, proyectos y tareas. Para no llenar tu base de desarrol
 createdb tareas_test        # Postgres local; en Neon o Supabase, crea otra base o rama
 ```
 
-Crea `.env.testing` (git lo ignora, igual que `.env`) con su conexión:
+Crea `.env.testing` **dentro de la carpeta del proyecto** (`tareas/`, junto a `.env`; si lo dejas en la carpeta
+que contiene el proyecto, Point no lo encuentra). Git lo ignora, igual que `.env`. Su contenido:
 
 ```
 DB_DSN="pgsql:host=127.0.0.1;port=5432;dbname=tareas_test"
@@ -32,7 +33,7 @@ DB_PASS=""
 ```
 
 `php point test` la usa en lugar de la de `.env` y **aplica las migraciones** antes de empezar. Si no
-la creas, los tests usan tu base de desarrollo (y Point te lo avisa).
+la creas, los tests usan tu base de desarrollo (y Point te lo avisa con «Aviso: los tests usan la base de .env»).
 
 ## Paso 2: tu primer archivo de tests
 
@@ -70,8 +71,8 @@ Cómo se lee un test:
 - `http('MÉTODO', '/ruta', $datos, $cabeceras)` llama a tu API y devuelve la respuesta: `->status` (código) y `->body` (el JSON como array).
 - `expect($valor)->toBe(...)` comprueba el resultado. Si no se cumple, el test falla y te dice qué esperaba y qué recibió.
 
-La primera línea carga `tests/helpers.php`, con dos ayudas (`nuevoUsuario()` y `conToken()`) que
-creamos en el siguiente paso.
+La primera línea carga `tests/helpers.php`, con las ayudas `nuevoUsuario()`, `conToken()` y
+`nuevoProyecto()`. **Antes de ejecutar los tests**, crea ese archivo con el paso 3.
 
 ## Paso 3: ayudas para los tests
 
@@ -88,6 +89,12 @@ function nuevoUsuario(): int
     $email = 'test_' . bin2hex(random_bytes(4)) . '@example.com';
     $res = http('POST', '/users', ['name' => 'Tester', 'email' => $email, 'password' => 'secreto123']);
     return $res->body['data']['id'];
+}
+
+/** Crea un proyecto del usuario y devuelve su id. */
+function nuevoProyecto(int $userId): int
+{
+    return http('POST', '/projects', ['name' => 'Proyecto de prueba'], conToken($userId))->body['data']['id'];
 }
 
 /** Cabecera Authorization con un token del usuario indicado. */
@@ -110,12 +117,6 @@ php point make:test tasks
 <?php
 
 require_once __DIR__ . '/helpers.php';
-
-/** Crea un proyecto del usuario y devuelve su id. */
-function nuevoProyecto(int $userId): int
-{
-    return http('POST', '/projects', ['name' => 'Proyecto de prueba'], conToken($userId))->body['data']['id'];
-}
 
 test('crear una tarea válida: empieza abierta y con prioridad 3', function () {
     $user = nuevoUsuario();
