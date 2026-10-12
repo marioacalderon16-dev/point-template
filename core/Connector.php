@@ -83,7 +83,7 @@ class Connector
             $fieldsToValidate = array_diff_key($input, $globalFields);
             $sourcesToValidate = array_diff_key($inputSources, $globalFields);
 
-            $validator = new Validator($fieldsToValidate, $route['expects'], $sourcesToValidate, false);
+            $validator = new Validator($fieldsToValidate, $route['expects'], $sourcesToValidate, false, $route['messages'] ?? []);
             if (!$validator->passes()) {
                 throw new \RuntimeException("Validation failed in connected route '{$route['name']}': " . json_encode($validator->errors()));
             }

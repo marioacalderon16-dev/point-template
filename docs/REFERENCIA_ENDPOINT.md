@@ -80,6 +80,7 @@ con la cabecera `Allow`.
 | `group('nombre')` | Grupo de middlewares; un grupo no declarado responde 500 | [Grupos y roles](#grupos-y-roles) |
 | `through(...)` | Middlewares extra para esta ruta (`'rate_limit:5'`, `'auth:billing'`) | [Límite de peticiones](#límite-de-peticiones) |
 | `expects([...])` | Reglas por campo; solo los campos declarados llegan a `handle`; varias llamadas se acumulan | [Datos y validación](#2-datos-y-validación) |
+| `messages([...])` | Tus textos para los errores de validación, en lugar de los de Point | [Mensajes propios](#mensajes-propios) |
 | `guard(fn)` | Comprobación extra antes de validar; `false` → 403 | [`guard`](#guard) |
 | `handle(fn)` | La lógica; también acepta `[Clase::class, 'método']` o una clase invocable | [Acciones](#acciones) |
 | `cache(segundos)` | Guarda la respuesta GET | [Caché](#caché-cache) |
@@ -115,6 +116,31 @@ que se leen con [`Auth`](#auth).
 ```
 Con datos inválidos responde **422** con `{"status":422,"message":"Validation failed","errors":{"email":["…"]}}`.
 Una regla que no existe (errata) responde 500 en lugar de dejar el campo sin validar.
+
+### Mensajes propios
+
+Los mensajes de Point usan el nombre técnico del campo («El campo email es obligatorio.»). Con
+`->messages()` escribes los tuyos:
+
+```php
+->expects([
+    'name'  => 'required|string|min:2',
+    'email' => 'required|email|unique:users,email',
+])
+->messages([
+    'name.required' => 'Escribe tu nombre.',          // campo.regla: solo cuando falla esa regla
+    'email.unique'  => 'Ese correo ya está registrado.',
+    'email'         => 'Revisa el correo.',            // solo el campo: para cualquier otra regla de email
+])
+```
+```
+POST /users {"email":"ana@example.com"}   →  422 {"errors": {"name": ["Escribe tu nombre."], "email": ["Ese correo ya está registrado."]}}
+```
+- Se busca primero `campo.regla` y después `campo`; si no hay ninguno, sale el mensaje de Point.
+- La **clave** de cada error sigue siendo el nombre técnico (`"email"`): el frontend la usa para saber debajo de qué campo mostrarlo.
+- Funciona con las reglas propias (`'due_date.workday'`), con la máquina de estados (`'status.transition'`) y con listas (`'tags.integer'` para cada elemento de `each:integer`).
+- `:field` dentro del texto se cambia por el nombre del campo. Varias llamadas a `messages()` se acumulan; `Endpoint::resource()` también lo admite.
+- Fuera de un endpoint: `new Core\Validator($datos, $reglas, [], false, $mensajes)`.
 
 ### Reglas nativas
 

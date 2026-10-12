@@ -10,6 +10,7 @@ class Resource
     private ?string $group = null;
     private array $through = [];
     private array $expects = [];
+    private array $messages = [];
     private array $guards = [];
     private $transform = null;
     private $onError = null;
@@ -36,6 +37,13 @@ class Resource
     public function expects(array $rules): self
     {
         $this->expects = $rules;
+        return $this;
+    }
+
+    /** Mensajes de validación propios para todas las rutas del recurso (como Endpoint::messages). */
+    public function messages(array $messages): self
+    {
+        $this->messages = array_merge($this->messages, $messages);
         return $this;
     }
 
@@ -104,6 +112,7 @@ class Resource
             'transform' => $this->transform,
             'guards' => $this->guards,
             'onError' => $this->onError,
+            'messages' => $this->messages,
         ]);
         return $this;
     }

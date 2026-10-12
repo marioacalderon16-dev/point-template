@@ -197,7 +197,9 @@ test('guías: el proyecto Tareas funciona siguiendo los pasos en orden', functio
             $user = guideData($created);
             expect($user['email'])->toBe('marta@example.com');
             expect(array_key_exists('password', $user))->toBeFalse();
-            expect(guidePoint($app, $db, 'call users.create name=Marta email=marta@example.com password=secreto123')[1])->toBe(1);
+            [$dupOut, $dupCode] = guidePoint($app, $db, 'call users.create name=Marta email=marta@example.com password=secreto123');
+            expect($dupCode)->toBe(1);
+            expect($dupOut)->toContain('Ese correo ya está registrado. ¿Quieres iniciar sesión?');
 
             $stored = (new PDO($dsn, $db[1], $db[2]))->query('SELECT password FROM users')->fetchColumn();
             expect(str_starts_with((string) $stored, '$2y$'))->toBeTrue();
@@ -309,7 +311,8 @@ test('guías: el proyecto Tareas funciona siguiendo los pasos en orden', functio
                 expect($again[2]['data']['id'])->toBe($first[2]['data']['id']);
                 expect($again[1]['idempotent-replayed'] ?? null)->toBe('true');
 
-                $log = fn () => (string) @file_get_contents("$app/storage/logs/" . date('Y-m-d') . '.log');
+                // Todos los archivos: el proyecto fecha los logs con su TIME_ZONE, que puede ir un día por delante o por detrás
+                $log = fn () => implode('', array_map('file_get_contents', glob("$app/storage/logs/*.log") ?: []));
                 expect($log())->toContain('aviso.tarea_creada');
                 expect($log())->toContain('marta@example.com');
 

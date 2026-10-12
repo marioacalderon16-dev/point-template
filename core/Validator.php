@@ -65,12 +65,19 @@ class Validator
         }
     }
 
-    public function __construct(array $input, array $rules, array $sources = [], bool $strict = false)
+    /** @var array<string, string> Mensajes propios: 'campo.regla' => texto, o 'campo' => texto para cualquier regla */
+    private array $messages = [];
+
+    /** Regla que se está aplicando, para elegir su mensaje propio. */
+    private string $currentRule = '';
+
+    public function __construct(array $input, array $rules, array $sources = [], bool $strict = false, array $messages = [])
     {
         $this->input = $input;
         $this->rules = $rules;
         $this->sources = $sources;
         $this->strict = $strict;
+        $this->messages = $messages;
     }
 
     public function passes(): bool
@@ -162,6 +169,7 @@ class Validator
 
     private function applyRule(string $field, &$value, string $rule, ?string $param, array $allRules): void
     {
+        $this->currentRule = $rule;
         switch ($rule) {
             case 'trim':
                 if (is_string($value))
@@ -587,7 +595,27 @@ class Validator
         if (!isset($this->errors[$field])) {
             $this->errors[$field] = [];
         }
-        $this->errors[$field][] = $message;
+        $this->errors[$field][] = $this->customMessage($field) ?? $message;
+    }
+
+    /**
+     * Mensaje propio para el error actual, de más a menos concreto: 'campo.regla' y 'campo'. En los
+     * elementos de each (items.0) también vale el nombre de la lista (items.regla, items). Las reglas
+     * de Rules::transition se llaman 'transition'. ':field' se cambia por el nombre del campo.
+     */
+    private function customMessage(string $field): ?string
+    {
+        if ($this->messages === []) {
+            return null;
+        }
+        $rule = str_starts_with($this->currentRule, 'transition_') ? 'transition' : $this->currentRule;
+        $base = (string) preg_replace('/(\.\d+)+$/', '', $field);
+        foreach (array_unique(["$field.$rule", "$base.$rule", $field, $base]) as $key) {
+            if (isset($this->messages[$key]) && is_string($this->messages[$key])) {
+                return str_replace(':field', $field, $this->messages[$key]);
+            }
+        }
+        return null;
     }
 
     private function hasError(string $field): bool

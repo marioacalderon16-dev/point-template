@@ -135,18 +135,26 @@ Endpoint::from(__FILE__)
     ->name('users.create')
     ->group('public')
     ->expects(CreateUser::rules())
+    ->messages([
+        'email.unique' => 'Ese correo ya está registrado. ¿Quieres iniciar sesión?',
+    ])
     ->handle(fn ($input) => Response::created((new CreateUser)($input)));
 ```
 
 El endpoint solo se ocupa de lo HTTP (ruta, acceso, validación y respuesta); la lógica está en la
 acción. `expects(CreateUser::rules())` valida con las mismas reglas que la acción.
 
+`->messages()` cambia el texto de un error por el tuyo. `'email.unique'` significa "cuando falle la
+regla `unique` del campo `email`". Sin él, el usuario leería el mensaje técnico de Point, con el nombre
+del campo (`email`). Puedes escribir uno para cada regla (`'name.required' => 'Escribe tu nombre.'`) o
+uno para todo el campo (`'email' => 'Revisa el correo.'`).
+
 ```bash
 curl -s -X POST http://localhost:8090/users -H "Content-Type: application/json" \
   -d '{"name":"Marta","email":"marta@example.com","password":"secreto123"}'        # 201
 ```
 
-Repite la misma petición: responde **422** porque el email ya existe.
+Repite la misma petición: responde **422** con tu mensaje, «Ese correo ya está registrado. ¿Quieres iniciar sesión?».
 
 ## Paso 5: iniciar sesión (`POST /login`)
 

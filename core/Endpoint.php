@@ -25,6 +25,7 @@ class Endpoint
     private ?string $mcp = null;
     private ?int $idempotent = null;
     private ?array $async = null;
+    private array $messages = [];
 
     /** Bloqueos de idempotencia de esta petición: flock se libera solo al terminar el proceso. */
     private static array $locks = [];
@@ -129,6 +130,17 @@ class Endpoint
         return $this;
     }
 
+    /**
+     * Mensajes de validación propios en lugar de los de Point: ['email.unique' => 'Ese correo ya está
+     * registrado.', 'name' => 'Revisa el nombre.']. 'campo.regla' para una regla, 'campo' para cualquiera.
+     * Varias llamadas se acumulan.
+     */
+    public function messages(array $messages): self
+    {
+        $this->messages = array_merge($this->messages, $messages);
+        return $this;
+    }
+
     public function name(string $name): self
     {
         $this->name = $name;
@@ -204,6 +216,7 @@ class Endpoint
             'mcp' => $this->mcp,
             'idempotent' => $this->idempotent,
             'async' => $this->async,
+            'messages' => $this->messages,
         ]);
         return $this;
     }
@@ -297,7 +310,7 @@ class Endpoint
         }
 
         if (!empty($route['expects'])) {
-            $validator = new Validator($inputRaw, $route['expects'], $inputSources, $strict);
+            $validator = new Validator($inputRaw, $route['expects'], $inputSources, $strict, $route['messages'] ?? []);
             if (!$validator->passes()) {
                 self::sendJson([
                     'status' => 422,
