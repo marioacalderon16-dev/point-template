@@ -491,7 +491,8 @@ final class QueryBuilder
     public function raw(string $sql, array $bindings = []): array
     {
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($bindings);
+        self::bindValues($stmt, $bindings);
+        $stmt->execute();
         return $stmt->fetchAll();
     }
 
@@ -582,9 +583,27 @@ final class QueryBuilder
     private function execute(string $sql): \PDOStatement
     {
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($this->bindings);
+        self::bindValues($stmt, $this->bindings);
+        $stmt->execute();
         $this->reset();
         return $stmt;
+    }
+
+    /**
+     * Enlaza cada valor con su tipo. execute($array) envía todo como texto y false llega como '',
+     * que Postgres rechaza en una columna boolean. Claves enteras: parámetros posicionales (?).
+     */
+    public static function bindValues(\PDOStatement $stmt, array $bindings): void
+    {
+        foreach ($bindings as $key => $value) {
+            $type = match (true) {
+                is_bool($value) => PDO::PARAM_BOOL,
+                is_int($value)  => PDO::PARAM_INT,
+                $value === null => PDO::PARAM_NULL,
+                default         => PDO::PARAM_STR,
+            };
+            $stmt->bindValue(is_int($key) ? $key + 1 : $key, $value, $type);
+        }
     }
 
     private function reset(): void

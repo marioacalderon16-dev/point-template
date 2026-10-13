@@ -62,7 +62,11 @@ class SeedRunner
     private function ensureTable(): void
     {
         $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
-        $idCol = $driver === 'pgsql' ? 'BIGSERIAL PRIMARY KEY' : 'BIGINT AUTO_INCREMENT PRIMARY KEY';
+        $idCol = match ($driver) {
+            'pgsql'  => 'BIGSERIAL PRIMARY KEY',
+            'sqlite' => 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            default  => 'BIGINT AUTO_INCREMENT PRIMARY KEY',
+        };
 
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS seeds (
             id $idCol,

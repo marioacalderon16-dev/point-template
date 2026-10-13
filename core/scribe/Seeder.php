@@ -33,7 +33,8 @@ class Seeder
         }
 
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($values);
+        \Core\QueryBuilder::bindValues($stmt, $values);
+        $stmt->execute();
 
         return count($rows);
     }

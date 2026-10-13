@@ -115,7 +115,11 @@ class Runner
 
     private function ensureTable(): void
     {
-        $idCol = $this->driver === 'pgsql' ? 'BIGSERIAL PRIMARY KEY' : 'BIGINT AUTO_INCREMENT PRIMARY KEY';
+        $idCol = match ($this->driver) {
+            'pgsql'  => 'BIGSERIAL PRIMARY KEY',
+            'sqlite' => 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            default  => 'BIGINT AUTO_INCREMENT PRIMARY KEY',
+        };
 
         $this->pdo->exec("CREATE TABLE IF NOT EXISTS migrations (
             id $idCol,

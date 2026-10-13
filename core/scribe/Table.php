@@ -263,9 +263,11 @@ class Table
         $type = $this->mapType($col, $driver);
 
         if ($col['type'] === 'id') {
-            return $driver === 'pgsql'
-                ? "$name BIGSERIAL PRIMARY KEY"
-                : "$name BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY";
+            return match ($driver) {
+                'pgsql'  => "$name BIGSERIAL PRIMARY KEY",
+                'sqlite' => "$name INTEGER PRIMARY KEY AUTOINCREMENT",
+                default  => "$name BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY",
+            };
         }
 
         $nullable = !empty($col['nullable']) ? 'NULL' : 'NOT NULL';
